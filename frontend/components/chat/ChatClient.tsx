@@ -154,8 +154,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const preferredVoiceRef = useRef<VoicePick | null>(null);
   const voiceTurnPendingRef = useRef(false);
   const hasUserInteractedRef = useRef(false);
-  const welcomeSpeechPendingRef = useRef(true);
+  const welcomeSpeechPendingRef = useRef(false);
   const lastAssistantTextRef = useRef(welcomeText);
+  const ttsRetryRef = useRef(false);
 
   const backendBaseUrl = useMemo(
     () => process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000",
@@ -261,10 +262,6 @@ export function ChatClient({ initialName }: { initialName: string }) {
       if (hasUserInteractedRef.current) return;
       hasUserInteractedRef.current = true;
       unlockTts();
-      if (welcomeSpeechPendingRef.current) {
-        welcomeSpeechPendingRef.current = false;
-        speak(welcomeText);
-      }
     };
     window.addEventListener("pointerdown", markInteractedAndSpeakWelcome, {
       once: true,
@@ -293,6 +290,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
 
   function speak(text: string) {
     if (!ttsSupported || typeof window === "undefined") return;
+    ttsRetryRef.current = false;
     setTtsErrorDetail(null);
     setTtsState("queued");
     try {
@@ -315,6 +313,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
     utterance.onstart = () => {
       setMicState("speaking");
       setTtsState("started");
+      setVoiceBanner(null);
     };
     utterance.onend = () => {
       setMicState("idle");
@@ -328,6 +327,38 @@ export function ChatClient({ initialName }: { initialName: string }) {
       if (detail === "interrupted" || detail === "canceled") {
         setTtsState("ended");
         setTtsErrorDetail(null);
+        return;
+      }
+      if (!ttsRetryRef.current) {
+        ttsRetryRef.current = true;
+        const fallback = new SpeechSynthesisUtterance(text);
+        fallback.lang = "en-US";
+        fallback.rate = 1;
+        fallback.pitch = 1;
+        fallback.volume = 1;
+        fallback.onstart = () => {
+          setMicState("speaking");
+          setTtsState("started");
+          setVoiceBanner(null);
+        };
+        fallback.onend = () => {
+          setMicState("idle");
+          setTtsState("ended");
+        };
+        fallback.onerror = () => {
+          setMicState("idle");
+          setTtsState("error");
+          setTtsErrorDetail(detail);
+          setVoiceBanner("Text-to-speech failed. You can continue in text mode.");
+        };
+        window.setTimeout(() => {
+          try {
+            window.speechSynthesis.resume();
+          } catch {
+            // noop
+          }
+          window.speechSynthesis.speak(fallback);
+        }, 60);
         return;
       }
       setTtsState("error");
@@ -369,8 +400,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
       lastAssistantTextRef.current = data.response;
       setTraces(data.traces || []);
       setLastPayload(data.payload || null);
-      // Speak all assistant replies once the user has interacted with the page.
-      if (hasUserInteractedRef.current || shouldSpeakForThisTurn) {
+      // Auto-voice only for mic-originated turns; text turns use Speak button.
+      if (shouldSpeakForThisTurn) {
         speak(voiceTtsText(data));
       }
     } catch (e) {
