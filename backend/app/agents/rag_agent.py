@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -11,6 +12,54 @@ from app.agents.types import AgentResult, AgentTraceStep
 from app.llm.client import chat_completion_safe, llm_available, parse_json_object
 from app.rag.embed import get_embedder
 from app.rag.search import search_chunks
+
+
+def _query_terms(query: str) -> set[str]:
+    terms = {t for t in re.findall(r"[a-z0-9]{3,}", query.lower())}
+    stop = {
+        "what",
+        "why",
+        "how",
+        "when",
+        "where",
+        "which",
+        "with",
+        "from",
+        "about",
+        "fund",
+        "funds",
+        "direct",
+        "growth",
+        "plan",
+        "show",
+        "tell",
+    }
+    return {t for t in terms if t not in stop}
+
+
+def _rerank_and_trim_hits(query: str, hits: list[dict[str, Any]], top_k: int = 4) -> list[dict[str, Any]]:
+    """Boost lexical overlap so final context stays tightly on-topic."""
+    terms = _query_terms(query)
+    if not hits:
+        return []
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for h in hits:
+        base = float(h.get("score") or 0.0)
+        hay = f"{h.get('source_url', '')} {h.get('content', '')}".lower()
+        overlap = sum(1 for t in terms if t in hay)
+        score = base + (0.06 * overlap)
+        scored.append((score, h))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    trimmed = [h for _, h in scored[: max(2, top_k)]]
+    return trimmed
+
+
+def _format_sources(urls: list[str]) -> str:
+    if not urls:
+        return ""
+    # Keep citations concise and relevant for chat + TTS.
+    top = urls[:2]
+    return "Sources:\n" + "\n".join(f"- {u}" for u in top)
 
 
 def _merge_hits(session: Session, queries: list[str], top_per: int = 4) -> list[dict[str, Any]]:
@@ -85,14 +134,13 @@ def answer_faq(session: Session, query: str) -> AgentResult:
                 traces=traces,
             )
 
-        top = hits[:6]
+        top = _rerank_and_trim_hits(query, hits, top_k=4)
         context_blocks = []
-        sources: list[str] = []
-        for h in top:
+        source_by_idx: dict[int, str] = {}
+        for idx, h in enumerate(top, start=1):
             url = str(h.get("source_url", ""))
-            if url and url not in sources:
-                sources.append(url)
-            context_blocks.append(f"URL: {url}\nEXCERPT:\n{str(h.get('content', ''))[:900]}")
+            source_by_idx[idx] = url
+            context_blocks.append(f"[{idx}] URL: {url}\nEXCERPT:\n{str(h.get('content', ''))[:900]}")
         context = "\n\n---\n\n".join(context_blocks)
 
         ans_res = chat_completion_safe(
@@ -100,10 +148,12 @@ def answer_faq(session: Session, query: str) -> AgentResult:
                 {
                     "role": "system",
                     "content": (
-                        "You are Finn. Answer the user using ONLY the excerpts. "
-                        "If excerpts are insufficient, say so honestly. "
-                        "Do not invent fund facts. Cite sources by listing their URLs at the end on one line "
-                        'starting exactly with "Sources: " then comma-separated URLs you relied on.'
+                        "You are Finn (Groww-style assistant). Use ONLY provided excerpts. "
+                        "Return STRICT JSON only with this schema: "
+                        '{"answer":"string","used_source_indices":[1,2]}. '
+                        "answer rules: conversational, concise, no raw chunk dumping, no ellipses from excerpts, "
+                        "include concrete values when present (NAV, %, period), and if data is insufficient say that clearly. "
+                        "used_source_indices rules: include only 1-2 excerpt indices actually used for the final answer."
                     ),
                 },
                 {
@@ -122,21 +172,42 @@ def answer_faq(session: Session, query: str) -> AgentResult:
                 outcome="answer_ready",
             )
         )
-        answer = (
-            ans_res.text.strip()
-            if ans_res.provider != "none" and ans_res.text.strip()
-            else (
-                "Here is what I found from the current knowledge base:\n"
-                + "\n".join(f"- {h['content'][:160]}..." for h in top[:3])
-                + "\n\nSources: "
-                + ", ".join(sources)
+        parsed = parse_json_object(ans_res.text) if ans_res.text else None
+        answer_body = ""
+        used_urls: list[str] = []
+        if isinstance(parsed, dict):
+            answer_body = str(parsed.get("answer", "")).strip()
+            raw_indices = parsed.get("used_source_indices")
+            if isinstance(raw_indices, list):
+                for x in raw_indices[:2]:
+                    try:
+                        idx = int(x)
+                    except (TypeError, ValueError):
+                        continue
+                    url = source_by_idx.get(idx)
+                    if url and url not in used_urls:
+                        used_urls.append(url)
+        if not used_urls:
+            # Fallback: keep citations tight to top 1-2 reranked sources.
+            for h in top:
+                url = str(h.get("source_url", "")).strip()
+                if url and url not in used_urls:
+                    used_urls.append(url)
+                if len(used_urls) >= 2:
+                    break
+        if not answer_body:
+            # Non-LLM/parse fallback: concise summary instead of chunk dumps.
+            answer_body = (
+                "I found related information, but I cannot confidently extract an exact value from the indexed text for this query. "
+                "Please rephrase with a specific fund and metric, or I can help book an advisor session."
             )
-        )
-        if sources and "Sources:" not in answer:
-            answer = answer.rstrip() + "\n\nSources: " + ", ".join(sources)
+        answer = answer_body.strip()
+        src_block = _format_sources(used_urls)
+        if src_block:
+            answer = f"{answer}\n\n{src_block}"
         return AgentResult(
             response_text=answer,
-            payload={"sources": sources, "confidence": "medium"},
+            payload={"sources": used_urls[:2], "confidence": "medium"},
             traces=traces,
         )
 
@@ -178,24 +249,25 @@ def answer_faq(session: Session, query: str) -> AgentResult:
             traces=traces,
         )
 
-    top = hits[:3]
-    snippets = []
-    sources = []
+    top = _rerank_and_trim_hits(query, hits, top_k=3)
+    sources: list[str] = []
     for h in top:
-        snippets.append(f"- {h['content'][:160]}...")
-        if h["source_url"] not in sources:
-            sources.append(h["source_url"])
-
+        url = str(h.get("source_url", "")).strip()
+        if url and url not in sources:
+            sources.append(url)
+        if len(sources) >= 2:
+            break
     response = (
-        "Here is what I found from the current knowledge base:\n"
-        + "\n".join(snippets)
-        + "\n\nSources: "
-        + ", ".join(sources)
+        "I found relevant information in the knowledge base, but cannot confidently synthesize a precise final value without LLM support. "
+        "Please enable LLM keys for high-quality synthesized FAQ responses."
     )
+    src_block = _format_sources(sources)
+    if src_block:
+        response = f"{response}\n\n{src_block}"
     if replanned:
         response = "I refined the search once to improve relevance.\n\n" + response
     return AgentResult(
         response_text=response,
-        payload={"sources": sources, "confidence": "medium"},
+        payload={"sources": sources[:2], "confidence": "medium"},
         traces=traces,
     )
