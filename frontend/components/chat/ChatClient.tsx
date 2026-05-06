@@ -155,6 +155,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const voiceTurnPendingRef = useRef(false);
   const hasUserInteractedRef = useRef(false);
   const welcomeSpeechPendingRef = useRef(true);
+  const lastAssistantTextRef = useRef(welcomeText);
 
   const backendBaseUrl = useMemo(
     () => process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000",
@@ -358,6 +359,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
       if (!res.ok) throw new Error(`Chat API failed (${res.status})`);
       const data = (await res.json()) as ChatApiResponse;
       setMessages((prev) => [...prev, { role: "assistant", text: data.response }]);
+      lastAssistantTextRef.current = data.response;
       setTraces(data.traces || []);
       setLastPayload(data.payload || null);
       // Speak all assistant replies once the user has interacted with the page.
@@ -414,6 +416,18 @@ export function ChatClient({ initialName }: { initialName: string }) {
       setMicState("idle");
       setVoiceBanner("Could not start voice input. Please use text.");
     }
+  }
+
+  function onSpeakClick() {
+    if (!ttsSupported) {
+      setVoiceBanner("Text-to-speech is unavailable in this browser.");
+      return;
+    }
+    hasUserInteractedRef.current = true;
+    welcomeSpeechPendingRef.current = false;
+    const text = (lastAssistantTextRef.current || "").trim();
+    if (!text) return;
+    speak(text.slice(0, 420));
   }
 
   const processingText = inferProcessingText(input || messages.at(-1)?.text || "");
@@ -580,6 +594,14 @@ export function ChatClient({ initialName }: { initialName: string }) {
                 : micState === "speaking"
                   ? "Speaking"
                   : "Mic"}
+          </button>
+          <button
+            type="button"
+            onClick={onSpeakClick}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+            title="Read latest reply aloud"
+          >
+            Speak
           </button>
           <button
             type="submit"
