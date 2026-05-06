@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 import os
+import smtplib
+from email.message import EmailMessage
 from typing import Protocol
 
 from app.config import (
@@ -163,21 +165,78 @@ class LiveSheetsAdapter:
                 "",
                 "",
             ]
-            svc.spreadsheets().values().append(
-                spreadsheetId=self.sheet_id,
-                range="A:L",
-                valueInputOption="USER_ENTERED",
-                body={"values": [row]},
-            ).execute()
+            # Prefer explicit tab range; fallback to plain A:L for existing sheets.
+            preferred_range = os.getenv("GOOGLE_SHEET_RANGE", "Bookings!A:L").strip() or "Bookings!A:L"
+            try:
+                svc.spreadsheets().values().append(
+                    spreadsheetId=self.sheet_id,
+                    range=preferred_range,
+                    valueInputOption="USER_ENTERED",
+                    body={"values": [row]},
+                ).execute()
+            except Exception:
+                svc.spreadsheets().values().append(
+                    spreadsheetId=self.sheet_id,
+                    range="A:L",
+                    valueInputOption="USER_ENTERED",
+                    body={"values": [row]},
+                ).execute()
             return SyncResult(ok=True, reference=f"row-{booking.booking_code}", detail="sheet append success")
         except Exception as exc:  # noqa: BLE001
             return SyncResult(ok=False, detail=f"sheet sync failed: {exc}")
 
 
+def _smtp_send(*, to_email: str, subject: str, body: str) -> SyncResult:
+    host = (os.getenv("GMAIL_SMTP_HOST", "smtp.gmail.com") or "").strip()
+    port_raw = (os.getenv("GMAIL_SMTP_PORT", "587") or "").strip()
+    user = (os.getenv("GMAIL_SMTP_USER") or "").strip()
+    app_password = (os.getenv("GMAIL_APP_PASSWORD") or "").strip()
+    if not host or not port_raw or not user or not app_password:
+        return SyncResult(ok=False, detail="smtp not configured (set GMAIL_SMTP_USER and GMAIL_APP_PASSWORD)")
+    try:
+        port = int(port_raw)
+    except ValueError:
+        return SyncResult(ok=False, detail=f"invalid GMAIL_SMTP_PORT: {port_raw}")
+    msg = EmailMessage()
+    msg["From"] = user
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    msg.set_content(body)
+    try:
+        with smtplib.SMTP(host, port, timeout=30) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(user, app_password)
+            server.send_message(msg)
+        return SyncResult(ok=True, reference=to_email, detail="smtp send success")
+    except Exception as exc:  # noqa: BLE001
+        return SyncResult(ok=False, detail=f"smtp send failed: {exc}")
+
+
 class LiveGmailAdapter:
     def queue_advisor_draft(self, booking: Booking) -> SyncResult:
-        # Phase 6: queue draft metadata only; send after HITL approval in Phase 8.
+        # Keep queue operation for booking-time flow; actual send happens in admin endpoint.
         return SyncResult(ok=True, reference=f"draft-{booking.booking_code}", detail="draft queued for HITL")
+
+
+class ErrorCalendarAdapter:
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+
+    def create_tentative_hold(self, booking: Booking) -> SyncResult:
+        return SyncResult(ok=False, detail=self.detail)
+
+    def cancel_hold(self, booking: Booking) -> SyncResult:
+        return SyncResult(ok=False, detail=self.detail)
+
+
+class ErrorSheetsAdapter:
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+
+    def upsert_booking_row(self, booking: Booking) -> SyncResult:
+        return SyncResult(ok=False, detail=self.detail)
 
 
 def build_integration_service() -> tuple[CalendarPort, SheetsPort, GmailPort]:
@@ -185,12 +244,19 @@ def build_integration_service() -> tuple[CalendarPort, SheetsPort, GmailPort]:
     if mode == "live":
         calendar_id = get_google_calendar_id()
         sheet_id = get_google_sheet_id()
-        if not calendar_id or not sheet_id:
-            # Fall back to mock instead of failing booking flow.
-            return MockCalendarAdapter(), MockSheetsAdapter(), MockGmailAdapter()
+        cal: CalendarPort = (
+            LiveGoogleCalendarAdapter(calendar_id)
+            if calendar_id
+            else ErrorCalendarAdapter("missing GOOGLE_CALENDAR_ID in live mode")
+        )
+        sheets: SheetsPort = (
+            LiveSheetsAdapter(sheet_id)
+            if sheet_id
+            else ErrorSheetsAdapter("missing GOOGLE_SHEET_ID in live mode")
+        )
         return (
-            LiveGoogleCalendarAdapter(calendar_id),
-            LiveSheetsAdapter(sheet_id),
+            cal,
+            sheets,
             LiveGmailAdapter(),
         )
     return MockCalendarAdapter(), MockSheetsAdapter(), MockGmailAdapter()
@@ -213,3 +279,11 @@ def sync_booking_cancelled(booking: Booking) -> dict:
     c = cal.cancel_hold(booking)
     s = sheets.upsert_booking_row(booking)
     return {"calendar": c.__dict__, "sheets": s.__dict__}
+
+
+def send_booking_email_smtp(*, to_email: str, subject: str, body: str) -> SyncResult:
+    return _smtp_send(to_email=to_email, subject=subject, body=body)
+
+
+def send_pulse_email_smtp(*, to_email: str, subject: str, body: str) -> SyncResult:
+    return _smtp_send(to_email=to_email, subject=subject, body=body)

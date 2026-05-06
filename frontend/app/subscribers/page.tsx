@@ -9,13 +9,13 @@ export default function SubscribersPage() {
           Home
         </Link>
         <span className="mx-2">/</span>
-        <span>Subscribers</span>
+        <span>Advisor</span>
       </p>
       <h1 className="mt-4 text-2xl font-bold text-slate-900">
-        Pulse subscribers
+        Advisor Updates
       </h1>
       <p className="mt-2 text-slate-600">
-        Subscribe to receive periodic market pulse updates from Finn.
+        Subscribe to receive advisor and market pulse updates from Finn.
       </p>
       <SubscriberSignupClient />
     </div>

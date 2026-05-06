@@ -53,7 +53,7 @@ def test_cancel_triggers_calendar_and_sheet_sync(monkeypatch, tmp_path) -> None:
         assert sync.get("sheets", {}).get("ok") is True
 
 
-def test_live_mode_without_ids_falls_back_to_mock(monkeypatch, tmp_path) -> None:
+def test_live_mode_without_ids_returns_explicit_errors(monkeypatch, tmp_path) -> None:
     db_file = tmp_path / "phase6_live_fallback.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
     monkeypatch.setenv("GOOGLE_INTEGRATIONS_MODE", "live")
@@ -66,6 +66,7 @@ def test_live_mode_without_ids_falls_back_to_mock(monkeypatch, tmp_path) -> None
         _chat(client, "phase6-s3", "book appointment next week for SIP")
         out = _chat(client, "phase6-s3", "yes")
         sync = out["payload"].get("integration_sync", {})
-        # Should still succeed due to mock fallback in live-without-ids mode.
-        assert sync.get("calendar", {}).get("ok") is True
-        assert sync.get("sheets", {}).get("ok") is True
+        assert sync.get("calendar", {}).get("ok") is False
+        assert "missing GOOGLE_CALENDAR_ID" in (sync.get("calendar", {}).get("detail") or "")
+        assert sync.get("sheets", {}).get("ok") is False
+        assert "missing GOOGLE_SHEET_ID" in (sync.get("sheets", {}).get("detail") or "")

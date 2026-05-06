@@ -30,6 +30,7 @@ from app.db.models import (
 )
 from app.db.session import get_session_factory, init_db
 from app.integrations.google_doc_append import append_plain_text_to_google_doc
+from app.integrations.service import send_booking_email_smtp, send_pulse_email_smtp
 from app.ml.theme_pipeline import generate_pulse, get_latest_pulse, list_pulse_history
 from app.rag.embed import get_embedder
 from app.rag.ingest_pipeline import rag_stats, run_full_ingest
@@ -184,6 +185,10 @@ def _is_valid_india_phone(value: str) -> bool:
 
 def _is_valid_email(value: str) -> bool:
     return bool(re.match(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$", value.strip()))
+
+
+def _smtp_configured() -> bool:
+    return bool((os.getenv("GMAIL_SMTP_USER") or "").strip() and (os.getenv("GMAIL_APP_PASSWORD") or "").strip())
 
 
 def _log_chat_artifacts(session: Session, req: ChatRequest, result: Any) -> None:
@@ -446,12 +451,45 @@ def admin_booking_email_send(booking_code: str, req: BookingEmailSendIn) -> dict
         b = session.scalar(select(Booking).where(Booking.booking_code == booking_code))
         if not b:
             return {"ok": False, "message": "booking not found"}
+        draft_res = draft_advisor_email(session, booking_code)
+        draft_text = str((draft_res.payload or {}).get("draft_text") or "").strip()
+        if not draft_text:
+            draft_text = (
+                f"Booking {b.booking_code}\n"
+                f"Customer: {b.customer_name}\n"
+                f"Topic: {b.topic}\n"
+                f"Slot: {b.date} {b.time_ist} IST\n"
+                f"Advisor: {b.advisor}\n"
+                f"Concern: {b.concern_summary}\n"
+            )
+        if _smtp_configured():
+            smtp = send_booking_email_smtp(
+                to_email=req.to_email,
+                subject=f"Advisor briefing: {b.booking_code} ({b.topic})",
+                body=draft_text,
+            )
+            if not smtp.ok:
+                return {"ok": False, "message": smtp.detail}
+            send_detail = smtp.detail
+            send_mode = "smtp_live"
+        else:
+            send_detail = "smtp not configured; simulated send"
+            send_mode = "mock_send"
         b.email_status = "sent"
         meta = dict(b.integration_meta or {})
         meta["email_sent_to"] = req.to_email
+        meta["email_send_detail"] = send_detail
+        meta["email_send_mode"] = send_mode
         b.integration_meta = meta
         session.commit()
-    return {"ok": True, "booking_code": booking_code, "to_email": req.to_email, "status": "sent"}
+    return {
+        "ok": True,
+        "booking_code": booking_code,
+        "to_email": req.to_email,
+        "status": "sent",
+        "detail": send_detail,
+        "mode": send_mode,
+    }
 
 
 @app.get("/api/admin/agent-activity")
@@ -509,12 +547,36 @@ def admin_send_pulse(req: SendPulseIn) -> dict[str, Any]:
     if latest is None:
         return {"ok": False, "message": "no pulse generated"}
     recipients = [e.strip().lower() for e in req.emails if e.strip()]
+    if not recipients:
+        return {"ok": False, "message": "no recipients selected"}
+    if not _smtp_configured():
+        return {
+            "ok": True,
+            "pulse_id": latest["pulse_id"],
+            "sent_count": len(recipients),
+            "failed_count": 0,
+            "recipients": recipients,
+            "failed": [],
+            "mode": "mock_send",
+        }
+    subject = f"Groww Weekly Pulse #{latest['pulse_id']}"
+    body = _format_pulse_for_doc(latest)
+    sent: list[str] = []
+    failed: list[dict[str, str]] = []
+    for to_email in recipients:
+        smtp = send_pulse_email_smtp(to_email=to_email, subject=subject, body=body)
+        if smtp.ok:
+            sent.append(to_email)
+        else:
+            failed.append({"email": to_email, "detail": smtp.detail})
     return {
-        "ok": True,
+        "ok": len(sent) > 0 and len(failed) == 0,
         "pulse_id": latest["pulse_id"],
-        "sent_count": len(recipients),
-        "recipients": recipients,
-        "mode": "mock_send",
+        "sent_count": len(sent),
+        "failed_count": len(failed),
+        "recipients": sent,
+        "failed": failed,
+        "mode": "smtp_live",
     }
 
 

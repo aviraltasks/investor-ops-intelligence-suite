@@ -3,7 +3,7 @@ import Link from "next/link";
 const nav = [
   { href: "/chat", label: "Chat" },
   { href: "/admin", label: "Admin" },
-  { href: "/subscribers", label: "Subscribers" },
+  { href: "/subscribers", label: "Advisor" },
 ] as const;
 
 export function SiteHeader() {
