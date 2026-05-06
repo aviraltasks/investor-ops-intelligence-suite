@@ -109,7 +109,11 @@ def answer_faq(session: Session, query: str) -> AgentResult:
                 reasoning_brief=reasoning or "Planned retrieval queries using LLM.",
                 tools=[f"llm.{plan_res.provider}", "retrieval_plan"],
                 replanned=False,
-                outcome=f"planned_queries={queries}",
+                outcome=(
+                    f"planned_queries={queries}"
+                    if plan_res.provider != "none"
+                    else f"planned_queries={queries}; llm_error={plan_res.error[:220]}"
+                ),
             )
         )
 
@@ -169,7 +173,11 @@ def answer_faq(session: Session, query: str) -> AgentResult:
                 reasoning_brief="Synthesized a grounded answer from retrieved chunks using LLM.",
                 tools=[f"llm.{ans_res.provider}", "rag.synthesize"],
                 replanned=False,
-                outcome="answer_ready",
+                outcome=(
+                    "answer_ready"
+                    if ans_res.provider != "none"
+                    else f"answer_fallback; llm_error={ans_res.error[:220]}"
+                ),
             )
         )
         parsed = parse_json_object(ans_res.text) if ans_res.text else None
@@ -198,8 +206,8 @@ def answer_faq(session: Session, query: str) -> AgentResult:
         if not answer_body:
             # Non-LLM/parse fallback: concise summary instead of chunk dumps.
             answer_body = (
-                "I found related information, but I cannot confidently extract an exact value from the indexed text for this query. "
-                "Please rephrase with a specific fund and metric, or I can help book an advisor session."
+                "I found relevant information, but the answer synthesizer is temporarily unavailable right now. "
+                "Please retry in a moment; I can still share the most relevant sources below."
             )
         answer = answer_body.strip()
         src_block = _format_sources(used_urls)
