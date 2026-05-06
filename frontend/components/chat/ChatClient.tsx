@@ -53,6 +53,7 @@ type VoicePick = {
   name: string;
   lang: string;
 };
+type TtsState = "idle" | "queued" | "started" | "ended" | "error";
 
 const COVERED_FUNDS = [
   "SBI Nifty Index Fund",
@@ -145,6 +146,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [voiceBanner, setVoiceBanner] = useState<string | null>(null);
   const [micState, setMicState] = useState<"idle" | "listening" | "processing" | "speaking">("idle");
+  const [ttsState, setTtsState] = useState<TtsState>("idle");
+  const [ttsErrorDetail, setTtsErrorDetail] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const synthesisUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const preferredVoiceRef = useRef<VoicePick | null>(null);
@@ -241,10 +244,20 @@ export function ChatClient({ initialName }: { initialName: string }) {
       window.speechSynthesis.cancel();
       synthesisUtteranceRef.current = null;
       setMicState((cur) => (cur === "speaking" ? "idle" : cur));
+      setTtsState("idle");
+    };
+    const unlockTts = () => {
+      if (typeof window === "undefined" || !window.speechSynthesis) return;
+      try {
+        window.speechSynthesis.resume();
+      } catch {
+        // noop
+      }
     };
     const markInteractedAndSpeakWelcome = () => {
       if (hasUserInteractedRef.current) return;
       hasUserInteractedRef.current = true;
+      unlockTts();
       if (welcomeSpeechPendingRef.current) {
         welcomeSpeechPendingRef.current = false;
         speak(welcomeText);
@@ -277,6 +290,13 @@ export function ChatClient({ initialName }: { initialName: string }) {
 
   function speak(text: string) {
     if (!voiceSupported || typeof window === "undefined") return;
+    setTtsErrorDetail(null);
+    setTtsState("queued");
+    try {
+      window.speechSynthesis.resume();
+    } catch {
+      // noop
+    }
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     const preferred = preferredVoiceRef.current;
@@ -289,10 +309,19 @@ export function ChatClient({ initialName }: { initialName: string }) {
     utterance.rate = 1;
     utterance.pitch = 1;
     utterance.volume = 1;
-    utterance.onstart = () => setMicState("speaking");
-    utterance.onend = () => setMicState("idle");
-    utterance.onerror = () => {
+    utterance.onstart = () => {
+      setMicState("speaking");
+      setTtsState("started");
+    };
+    utterance.onend = () => {
       setMicState("idle");
+      setTtsState("ended");
+    };
+    utterance.onerror = (evt) => {
+      setMicState("idle");
+      setTtsState("error");
+      const detail = typeof evt.error === "string" ? evt.error : "unknown";
+      setTtsErrorDetail(detail);
       setVoiceBanner("Text-to-speech failed. You can continue in text mode.");
     };
     synthesisUtteranceRef.current = utterance;
@@ -499,6 +528,12 @@ export function ChatClient({ initialName }: { initialName: string }) {
         {voiceBanner && (
           <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
             {voiceBanner}
+          </p>
+        )}
+        {voiceSupported && (
+          <p className="mt-2 text-[11px] text-slate-500">
+            Voice debug: {ttsState}
+            {ttsErrorDetail ? ` (${ttsErrorDetail})` : ""}
           </p>
         )}
 
