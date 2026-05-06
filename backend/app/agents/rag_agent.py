@@ -62,6 +62,64 @@ def _format_sources(urls: list[str]) -> str:
     return "Sources:\n" + "\n".join(f"- {u}" for u in top)
 
 
+def _sentences(text: str) -> list[str]:
+    raw = re.split(r"(?<=[.!?])\s+|\n+", text or "")
+    out: list[str] = []
+    for s in raw:
+        t = re.sub(r"\s+", " ", s).strip(" -•\t")
+        if len(t) < 30:
+            continue
+        out.append(t)
+    return out
+
+
+def _extract_snippets(query: str, hits: list[dict[str, Any]], limit: int = 3) -> list[str]:
+    q = query.lower()
+    if "exit load" in q:
+        keys = ["exit load", "redeem", "redemption", "lock-in", "elss"]
+    elif "nav" in q:
+        keys = ["nav", "net asset value", "asset value"]
+    elif "expense ratio" in q:
+        keys = ["expense ratio", "expense", "%"]
+    else:
+        keys = _query_terms(query) or {"fund", "mutual"}
+    snippets: list[str] = []
+    seen: set[str] = set()
+    for h in hits:
+        for s in _sentences(str(h.get("content", ""))):
+            low = s.lower()
+            if not any(k in low for k in keys):
+                continue
+            if ("nav" in q or "exit load" in q or "expense ratio" in q) and not re.search(r"\d", s):
+                continue
+            s = s[:220].rstrip()
+            if s in seen:
+                continue
+            seen.add(s)
+            snippets.append(s)
+            if len(snippets) >= limit:
+                return snippets
+    return snippets
+
+
+def _heuristic_answer(query: str, hits: list[dict[str, Any]]) -> str:
+    snippets = _extract_snippets(query, hits, limit=3)
+    if snippets:
+        if "exit load" in query.lower():
+            intro = "From the available fund documents, here is what I found about exit load:"
+        elif "nav" in query.lower():
+            intro = "From the indexed fund pages, here is what I found about NAV:"
+        elif "expense ratio" in query.lower():
+            intro = "From the indexed pages, here are the expense-ratio details I could extract:"
+        else:
+            intro = "From the available sources, here are the most relevant facts:"
+        return intro + "\n" + "\n".join(f"- {s}" for s in snippets)
+    return (
+        "I found related sources, but I could not reliably extract a precise value for this exact query from the available text. "
+        "Please try a more specific variant (fund name + exact metric), or retry in a minute."
+    )
+
+
 def _merge_hits(session: Session, queries: list[str], top_per: int = 4) -> list[dict[str, Any]]:
     seen: set[str] = set()
     merged: list[dict[str, Any]] = []
@@ -204,11 +262,8 @@ def answer_faq(session: Session, query: str) -> AgentResult:
                 if len(used_urls) >= 2:
                     break
         if not answer_body:
-            # Non-LLM/parse fallback: concise summary instead of chunk dumps.
-            answer_body = (
-                "I found relevant information, but the answer synthesizer is temporarily unavailable right now. "
-                "Please retry in a moment; I can still share the most relevant sources below."
-            )
+            # Non-LLM/parse fallback: provide query-specific extracted facts.
+            answer_body = _heuristic_answer(query, top)
         answer = answer_body.strip()
         src_block = _format_sources(used_urls)
         if src_block:
