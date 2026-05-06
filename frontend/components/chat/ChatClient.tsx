@@ -147,6 +147,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const synthesisUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const preferredVoiceRef = useRef<VoicePick | null>(null);
+  const voiceTurnPendingRef = useRef(false);
 
   const backendBaseUrl = useMemo(
     () => process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000",
@@ -198,6 +199,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
         setMicState("idle");
         return;
       }
+      voiceTurnPendingRef.current = true;
       setMicState("processing");
       void sendMessage(transcript);
     };
@@ -284,6 +286,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
   async function sendMessage(text: string) {
     const msg = text.trim();
     if (!msg || isLoading) return;
+    const shouldSpeakForThisTurn = voiceTurnPendingRef.current;
     setError(null);
     setMessages((prev) => [...prev, { role: "user", text: msg }]);
     setInput("");
@@ -303,8 +306,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
       setMessages((prev) => [...prev, { role: "assistant", text: data.response }]);
       setTraces(data.traces || []);
       setLastPayload(data.payload || null);
-      const shouldSpeak = micState === "processing" || micState === "listening";
-      if (shouldSpeak) {
+      if (shouldSpeakForThisTurn) {
         speak(voiceTtsText(data));
       }
     } catch (e) {
@@ -318,11 +320,12 @@ export function ChatClient({ initialName }: { initialName: string }) {
           text: "I’m having trouble reaching the backend right now. Please try again in a moment.",
         },
       ]);
-      if (micState === "processing" || micState === "listening") {
+      if (shouldSpeakForThisTurn) {
         speak("I am having trouble reaching the backend right now. Please try again.");
       }
     } finally {
       setIsLoading(false);
+      voiceTurnPendingRef.current = false;
       setMicState((cur) => (cur === "processing" ? "idle" : cur));
     }
   }
