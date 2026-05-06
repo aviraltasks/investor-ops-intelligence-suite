@@ -10,8 +10,12 @@ from sqlalchemy.orm import Session
 
 from app.agents.types import AgentResult, AgentTraceStep
 from app.llm.client import chat_completion_safe, llm_available, parse_json_object
+from app.db.models import RagChunk
 from app.rag.embed import get_embedder
 from app.rag.search import search_chunks
+
+_FAQ_ANSWER_CACHE: dict[str, tuple[str, list[str]]] = {}
+_FAQ_CACHE_MAX = 300
 
 
 def _query_terms(query: str) -> set[str]:
@@ -60,6 +64,26 @@ def _format_sources(urls: list[str]) -> str:
     # Keep citations concise and relevant for chat + TTS.
     top = urls[:2]
     return "Sources:\n" + "\n".join(f"- {u}" for u in top)
+
+
+def _cache_get(query: str) -> tuple[str, list[str]] | None:
+    return _FAQ_ANSWER_CACHE.get(query.strip().lower())
+
+
+def _cache_set(query: str, answer: str, sources: list[str]) -> None:
+    key = query.strip().lower()
+    if not key:
+        return
+    if len(_FAQ_ANSWER_CACHE) >= _FAQ_CACHE_MAX:
+        # simple FIFO-ish eviction (dict insertion order)
+        oldest = next(iter(_FAQ_ANSWER_CACHE.keys()))
+        _FAQ_ANSWER_CACHE.pop(oldest, None)
+    _FAQ_ANSWER_CACHE[key] = (answer, sources[:2])
+
+
+def _compact(text: str, *, max_len: int = 220) -> str:
+    t = re.sub(r"\s+", " ", text or "").strip()
+    return t[:max_len].rstrip()
 
 
 def _sentences(text: str) -> list[str]:
@@ -120,6 +144,69 @@ def _heuristic_answer(query: str, hits: list[dict[str, Any]]) -> str:
     )
 
 
+def _collect_sources(hits: list[dict[str, Any]], limit: int = 2) -> list[str]:
+    out: list[str] = []
+    for h in hits:
+        url = str(h.get("source_url", "")).strip()
+        if url and url not in out:
+            out.append(url)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _deterministic_faq_answer(session: Session, query: str) -> tuple[str, list[str]] | None:
+    """
+    LLM-light fast path: answer core FAQ intents with deterministic extraction.
+    Returns (answer, sources) when confident, else None.
+    """
+    q = query.lower()
+    if not any(k in q for k in ["exit load", "nav", "expense ratio"]):
+        return None
+    hits = _rerank_and_trim_hits(query, search_chunks(session, get_embedder(), query, top_k=8), top_k=6)
+    if not hits:
+        return None
+
+    if "exit load" in q:
+        for h in hits:
+            text = str(h.get("content", ""))
+            m = re.search(r"exit load[^.\n]{0,120}?(\d+(?:\.\d+)?)\s*%([^.\n]{0,120})", text, re.IGNORECASE)
+            if m:
+                pct = m.group(1)
+                tail = _compact(m.group(2), max_len=80)
+                answer = (
+                    f"The exit load is {pct}%{(' ' + tail) if tail else ''}. "
+                    "Funds charge exit load to discourage short-term redemptions and maintain portfolio stability."
+                )
+                return answer, _collect_sources([h] + hits)
+
+    if "nav" in q:
+        for h in hits:
+            text = str(h.get("content", ""))
+            # Typical patterns: "NAV: 123.45" or "NAV is ₹123.45"
+            m = re.search(r"\bnav\b[^0-9₹]{0,30}(?:₹\s*)?([0-9]+(?:\.[0-9]+)?)", text, re.IGNORECASE)
+            if m:
+                nav = m.group(1)
+                answer = f"The latest NAV found in our indexed sources is ₹{nav}."
+                return answer, _collect_sources([h] + hits)
+
+    if "expense ratio" in q:
+        for h in hits:
+            text = str(h.get("content", ""))
+            m = re.search(r"expense ratio[^.\n]{0,80}?(\d+(?:\.\d+)?)\s*%", text, re.IGNORECASE)
+            if m:
+                pct = m.group(1)
+                answer = f"The expense ratio found in our indexed sources is {pct}%."
+                return answer, _collect_sources([h] + hits)
+
+    # Concept fallback: short extracted bullets when exact value not parsable.
+    snippets = _extract_snippets(query, hits, limit=2)
+    if snippets:
+        answer = " ".join(_compact(s, max_len=120) for s in snippets)
+        return answer, _collect_sources(hits)
+    return None
+
+
 def _merge_hits(session: Session, queries: list[str], top_per: int = 4) -> list[dict[str, Any]]:
     seen: set[str] = set()
     merged: list[dict[str, Any]] = []
@@ -136,6 +223,43 @@ def _merge_hits(session: Session, queries: list[str], top_per: int = 4) -> list[
 
 def answer_faq(session: Session, query: str) -> AgentResult:
     traces: list[AgentTraceStep] = []
+
+    cached = _cache_get(query)
+    if cached:
+        cached_answer, cached_sources = cached
+        traces.append(
+            AgentTraceStep(
+                agent="rag_agent",
+                reasoning_brief="Served FAQ response from internal cache for low-latency reliability.",
+                tools=["faq.cache"],
+                replanned=False,
+                outcome="cache_hit",
+            )
+        )
+        out = _compact(cached_answer, max_len=240)
+        src_block = _format_sources(cached_sources)
+        if src_block:
+            out = f"{out}\n\n{src_block}"
+        return AgentResult(response_text=out, payload={"sources": cached_sources[:2], "confidence": "high"}, traces=traces)
+
+    deterministic = _deterministic_faq_answer(session, query)
+    if deterministic:
+        answer_body, det_sources = deterministic
+        _cache_set(query, answer_body, det_sources)
+        traces.append(
+            AgentTraceStep(
+                agent="rag_agent",
+                reasoning_brief="Answered core FAQ intent using deterministic extraction without LLM.",
+                tools=["vector.search", "faq.fast_path"],
+                replanned=False,
+                outcome="fast_path_answer",
+            )
+        )
+        out = _compact(answer_body, max_len=260)
+        src_block = _format_sources(det_sources)
+        if src_block:
+            out = f"{out}\n\n{src_block}"
+        return AgentResult(response_text=out, payload={"sources": det_sources[:2], "confidence": "high"}, traces=traces)
 
     if llm_available():
         plan_res = chat_completion_safe(
@@ -268,8 +392,9 @@ def answer_faq(session: Session, query: str) -> AgentResult:
         src_block = _format_sources(used_urls)
         if src_block:
             answer = f"{answer}\n\n{src_block}"
+        _cache_set(query, answer_body, used_urls)
         return AgentResult(
-            response_text=answer,
+            response_text=_compact(answer, max_len=520),
             payload={"sources": used_urls[:2], "confidence": "medium"},
             traces=traces,
         )
@@ -329,8 +454,9 @@ def answer_faq(session: Session, query: str) -> AgentResult:
         response = f"{response}\n\n{src_block}"
     if replanned:
         response = "I refined the search once to improve relevance.\n\n" + response
+    _cache_set(query, response, sources[:2])
     return AgentResult(
-        response_text=response,
+        response_text=_compact(response, max_len=520),
         payload={"sources": sources[:2], "confidence": "medium"},
         traces=traces,
     )

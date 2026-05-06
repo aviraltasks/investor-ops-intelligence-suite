@@ -99,7 +99,18 @@ const AGENT_COLORS: Record<string, string> = {
 };
 
 function voiceTtsText(data: ChatApiResponse): string {
-  const raw = data.response.split("\n").slice(0, 2).join(" ").slice(0, 260);
+  const cleaned = data.response
+    .split("\n")
+    .filter((line) => {
+      const l = line.trim().toLowerCase();
+      return !l.startsWith("sources:") && !l.startsWith("- http") && !l.startsWith("http");
+    })
+    .join(" ");
+  const raw = cleaned
+    .replace(/https?:\/\/\S+/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 220);
   const codeRaw = data.payload?.booking_code;
   const code = typeof codeRaw === "string" ? codeRaw.trim().toUpperCase() : "";
   if (/^GRW-W-[A-Z0-9]{4}$/.test(code) || /^GRW-[A-Z0-9]{4}$/.test(code)) {
