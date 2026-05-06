@@ -322,8 +322,15 @@ export function ChatClient({ initialName }: { initialName: string }) {
     };
     utterance.onerror = (evt) => {
       setMicState("idle");
-      setTtsState("error");
       const detail = typeof evt.error === "string" ? evt.error : "unknown";
+      // Browsers often emit interrupted/canceled when replacing active speech.
+      // Treat these as benign so users can tap Speak repeatedly without false errors.
+      if (detail === "interrupted" || detail === "canceled") {
+        setTtsState("ended");
+        setTtsErrorDetail(null);
+        return;
+      }
+      setTtsState("error");
       setTtsErrorDetail(detail);
       setVoiceBanner("Text-to-speech failed. You can continue in text mode.");
     };
