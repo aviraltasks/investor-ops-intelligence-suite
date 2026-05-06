@@ -200,6 +200,8 @@ def _log_chat_artifacts(session: Session, req: ChatRequest, result: Any) -> None
             )
         )
     for t in result.traces:
+        # Guard DB column limits: outcome is String(128) in AgentActivityLog.
+        outcome = str(t.outcome or "")[:120]
         session.add(
             AgentActivityLog(
                 session_id=req.session_id,
@@ -207,11 +209,15 @@ def _log_chat_artifacts(session: Session, req: ChatRequest, result: Any) -> None
                 agent=t.agent,
                 reasoning_brief=t.reasoning_brief,
                 tools_json=t.tools or [],
-                outcome=t.outcome,
+                outcome=outcome,
                 query_summary=req.message[:240],
             )
         )
-    session.commit()
+    try:
+        session.commit()
+    except Exception:
+        # Logging should never break chat responses.
+        session.rollback()
 
 
 def _now_ist_iso() -> str:
