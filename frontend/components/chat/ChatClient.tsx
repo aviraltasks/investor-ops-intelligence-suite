@@ -49,6 +49,10 @@ type SpeechRecognitionLike = {
   stop: () => void;
 };
 type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
+type VoicePick = {
+  name: string;
+  lang: string;
+};
 
 const COVERED_FUNDS = [
   "SBI Nifty Index Fund",
@@ -142,6 +146,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const [micState, setMicState] = useState<"idle" | "listening" | "processing" | "speaking">("idle");
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const synthesisUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const preferredVoiceRef = useRef<VoicePick | null>(null);
 
   const backendBaseUrl = useMemo(
     () => process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000",
@@ -205,6 +210,28 @@ export function ChatClient({ initialName }: { initialName: string }) {
     };
     recognitionRef.current = recognition;
 
+    const choosePreferredVoice = () => {
+      if (typeof window === "undefined" || !window.speechSynthesis) return;
+      const voices = window.speechSynthesis.getVoices();
+      if (!voices.length) return;
+      const normalized = voices.map((v) => ({
+        voice: v,
+        lang: (v.lang || "").toLowerCase(),
+        name: (v.name || "").toLowerCase(),
+      }));
+      const ranked =
+        normalized.find((v) => v.lang.startsWith("en-in") && /neural|natural|wavenet|samantha|zira|aria|google|microsoft/.test(v.name)) ||
+        normalized.find((v) => v.lang.startsWith("en-in")) ||
+        normalized.find((v) => v.lang.startsWith("en") && /neural|natural|wavenet|samantha|zira|aria|google|microsoft/.test(v.name)) ||
+        normalized.find((v) => v.lang.startsWith("en")) ||
+        normalized[0];
+      preferredVoiceRef.current = ranked
+        ? { name: ranked.voice.name, lang: ranked.voice.lang }
+        : null;
+    };
+    choosePreferredVoice();
+    window.speechSynthesis.onvoiceschanged = choosePreferredVoice;
+
     const stopSpeech = () => {
       window.speechSynthesis.cancel();
       synthesisUtteranceRef.current = null;
@@ -220,6 +247,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
       recognitionRef.current = null;
       stopSpeech();
       window.removeEventListener("beforeunload", stopSpeech);
+      if (window.speechSynthesis) {
+        window.speechSynthesis.onvoiceschanged = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -228,9 +258,16 @@ export function ChatClient({ initialName }: { initialName: string }) {
     if (!voiceSupported || typeof window === "undefined") return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "en-IN";
+    const preferred = preferredVoiceRef.current;
+    utterance.lang = preferred?.lang || "en-IN";
+    const selectedVoice =
+      window.speechSynthesis
+        .getVoices()
+        .find((v) => preferred && v.name === preferred.name && v.lang === preferred.lang) || null;
+    if (selectedVoice) utterance.voice = selectedVoice;
     utterance.rate = 1;
     utterance.pitch = 1;
+    utterance.volume = 1;
     utterance.onstart = () => setMicState("speaking");
     utterance.onend = () => setMicState("idle");
     utterance.onerror = () => {
@@ -238,7 +275,10 @@ export function ChatClient({ initialName }: { initialName: string }) {
       setVoiceBanner("Text-to-speech failed. You can continue in text mode.");
     };
     synthesisUtteranceRef.current = utterance;
-    window.speechSynthesis.speak(utterance);
+    // Some browsers drop immediate speak calls; tiny delay makes TTS more reliable.
+    window.setTimeout(() => {
+      window.speechSynthesis.speak(utterance);
+    }, 40);
   }
 
   async function sendMessage(text: string) {
@@ -263,7 +303,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
       setMessages((prev) => [...prev, { role: "assistant", text: data.response }]);
       setTraces(data.traces || []);
       setLastPayload(data.payload || null);
-      if (micState === "processing" || micState === "listening") {
+      const shouldSpeak = micState === "processing" || micState === "listening";
+      if (shouldSpeak) {
         speak(voiceTtsText(data));
       }
     } catch (e) {
