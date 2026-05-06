@@ -128,10 +128,11 @@ function inferProcessingText(input: string): string {
 }
 
 export function ChatClient({ initialName }: { initialName: string }) {
+  const welcomeText = `Hi ${initialName}! I provide factual mutual fund information and help schedule advisor appointments. I do not provide investment advice or handle personal account details in this chat.`;
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "assistant",
-      text: `Hi ${initialName}! I provide factual mutual fund information and help schedule advisor appointments. I do not provide investment advice or handle personal account details in this chat.`,
+      text: welcomeText,
     },
   ]);
   const [input, setInput] = useState("");
@@ -148,6 +149,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const synthesisUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const preferredVoiceRef = useRef<VoicePick | null>(null);
   const voiceTurnPendingRef = useRef(false);
+  const hasUserInteractedRef = useRef(false);
+  const welcomeSpeechPendingRef = useRef(true);
 
   const backendBaseUrl = useMemo(
     () => process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000",
@@ -239,6 +242,20 @@ export function ChatClient({ initialName }: { initialName: string }) {
       synthesisUtteranceRef.current = null;
       setMicState((cur) => (cur === "speaking" ? "idle" : cur));
     };
+    const markInteractedAndSpeakWelcome = () => {
+      if (hasUserInteractedRef.current) return;
+      hasUserInteractedRef.current = true;
+      if (welcomeSpeechPendingRef.current) {
+        welcomeSpeechPendingRef.current = false;
+        speak(welcomeText);
+      }
+    };
+    window.addEventListener("pointerdown", markInteractedAndSpeakWelcome, {
+      once: true,
+    });
+    window.addEventListener("keydown", markInteractedAndSpeakWelcome, {
+      once: true,
+    });
     window.addEventListener("beforeunload", stopSpeech);
     return () => {
       try {
@@ -249,6 +266,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
       recognitionRef.current = null;
       stopSpeech();
       window.removeEventListener("beforeunload", stopSpeech);
+      window.removeEventListener("pointerdown", markInteractedAndSpeakWelcome);
+      window.removeEventListener("keydown", markInteractedAndSpeakWelcome);
       if (window.speechSynthesis) {
         window.speechSynthesis.onvoiceschanged = null;
       }
@@ -286,6 +305,10 @@ export function ChatClient({ initialName }: { initialName: string }) {
   async function sendMessage(text: string) {
     const msg = text.trim();
     if (!msg || isLoading) return;
+    hasUserInteractedRef.current = true;
+    if (welcomeSpeechPendingRef.current) {
+      welcomeSpeechPendingRef.current = false;
+    }
     const shouldSpeakForThisTurn = voiceTurnPendingRef.current;
     setError(null);
     setMessages((prev) => [...prev, { role: "user", text: msg }]);
@@ -306,7 +329,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
       setMessages((prev) => [...prev, { role: "assistant", text: data.response }]);
       setTraces(data.traces || []);
       setLastPayload(data.payload || null);
-      if (shouldSpeakForThisTurn) {
+      // Speak all assistant replies once the user has interacted with the page.
+      if (hasUserInteractedRef.current || shouldSpeakForThisTurn) {
         speak(voiceTtsText(data));
       }
     } catch (e) {
