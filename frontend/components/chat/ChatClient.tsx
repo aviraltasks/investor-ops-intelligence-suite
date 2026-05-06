@@ -143,7 +143,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const [traces, setTraces] = useState<AgentTrace[]>([]);
   const [lastPayload, setLastPayload] = useState<ChatPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [voiceSupported, setVoiceSupported] = useState(false);
+  const [sttSupported, setSttSupported] = useState(false);
+  const [ttsSupported, setTtsSupported] = useState(false);
   const [voiceBanner, setVoiceBanner] = useState<string | null>(null);
   const [micState, setMicState] = useState<"idle" | "listening" | "processing" | "speaking">("idle");
   const [ttsState, setTtsState] = useState<TtsState>("idle");
@@ -183,40 +184,41 @@ export function ChatClient({ initialName }: { initialName: string }) {
     const hasSynthesis =
       typeof window !== "undefined" && "speechSynthesis" in window;
 
-    if (!SpeechRecognitionCtor || !hasSynthesis) {
-      setVoiceSupported(false);
-      setVoiceBanner(
-        "Voice is not supported in this browser. Switched to text mode.",
-      );
-      return;
+    setSttSupported(Boolean(SpeechRecognitionCtor));
+    setTtsSupported(Boolean(hasSynthesis));
+    if (!hasSynthesis) {
+      setVoiceBanner("Text-to-speech is not supported in this browser.");
+    } else if (!SpeechRecognitionCtor) {
+      setVoiceBanner("Voice input is unavailable in this browser. Text input still works.");
     }
 
-    setVoiceSupported(true);
-    const recognition = new SpeechRecognitionCtor();
-    recognition.lang = "en-IN";
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
+    if (SpeechRecognitionCtor) {
+      const recognition = new SpeechRecognitionCtor();
+      recognition.lang = "en-IN";
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
 
-    recognition.onstart = () => setMicState("listening");
-    recognition.onresult = (evt: SpeechRecognitionEventLike) => {
-      const transcript = evt.results?.[0]?.[0]?.transcript?.trim();
-      if (!transcript) {
+      recognition.onstart = () => setMicState("listening");
+      recognition.onresult = (evt: SpeechRecognitionEventLike) => {
+        const transcript = evt.results?.[0]?.[0]?.transcript?.trim();
+        if (!transcript) {
+          setMicState("idle");
+          return;
+        }
+        voiceTurnPendingRef.current = true;
+        setMicState("processing");
+        void sendMessage(transcript);
+      };
+      recognition.onerror = () => {
         setMicState("idle");
-        return;
-      }
-      voiceTurnPendingRef.current = true;
-      setMicState("processing");
-      void sendMessage(transcript);
-    };
-    recognition.onerror = () => {
-      setMicState("idle");
-      setVoiceBanner("Voice input failed. Switched to text mode.");
-    };
-    recognition.onend = () => {
-      setMicState((cur) => (cur === "listening" ? "idle" : cur));
-    };
-    recognitionRef.current = recognition;
+        setVoiceBanner("Voice input failed. Switched to text mode.");
+      };
+      recognition.onend = () => {
+        setMicState((cur) => (cur === "listening" ? "idle" : cur));
+      };
+      recognitionRef.current = recognition;
+    }
 
     const choosePreferredVoice = () => {
       if (typeof window === "undefined" || !window.speechSynthesis) return;
@@ -272,7 +274,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
     window.addEventListener("beforeunload", stopSpeech);
     return () => {
       try {
-        recognition.stop();
+        recognitionRef.current?.stop();
       } catch {
         // noop
       }
@@ -289,7 +291,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
   }, []);
 
   function speak(text: string) {
-    if (!voiceSupported || typeof window === "undefined") return;
+    if (!ttsSupported || typeof window === "undefined") return;
     setTtsErrorDetail(null);
     setTtsState("queued");
     try {
@@ -389,7 +391,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
   }
 
   function onMicClick() {
-    if (!voiceSupported) {
+    if (!sttSupported) {
       setVoiceBanner(
         "Voice is unavailable in this browser. Please continue with text.",
       );
@@ -530,7 +532,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
             {voiceBanner}
           </p>
         )}
-        {voiceSupported && (
+        {ttsSupported && (
           <p className="mt-2 text-[11px] text-slate-500">
             Voice debug: {ttsState}
             {ttsErrorDetail ? ` (${ttsErrorDetail})` : ""}
