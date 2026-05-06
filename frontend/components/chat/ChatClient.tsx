@@ -154,9 +154,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const preferredVoiceRef = useRef<VoicePick | null>(null);
   const voiceTurnPendingRef = useRef(false);
   const hasUserInteractedRef = useRef(false);
-  const welcomeSpeechPendingRef = useRef(false);
-  const lastAssistantTextRef = useRef(welcomeText);
+  const welcomeSpeechPendingRef = useRef(true);
   const ttsRetryRef = useRef(false);
+  const autoListenAfterSpeakRef = useRef(false);
 
   const backendBaseUrl = useMemo(
     () => process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000",
@@ -258,10 +258,28 @@ export function ChatClient({ initialName }: { initialName: string }) {
         // noop
       }
     };
+    const startListening = () => {
+      if (!recognitionRef.current) return;
+      try {
+        setVoiceBanner(null);
+        setMicState("listening");
+        recognitionRef.current.start();
+      } catch {
+        setMicState("idle");
+      }
+    };
     const markInteractedAndSpeakWelcome = () => {
       if (hasUserInteractedRef.current) return;
       hasUserInteractedRef.current = true;
       unlockTts();
+      if (welcomeSpeechPendingRef.current) {
+        welcomeSpeechPendingRef.current = false;
+        if (hasSynthesis) {
+          speak(welcomeText, { autoListen: true });
+          return;
+        }
+      }
+      startListening();
     };
     window.addEventListener("pointerdown", markInteractedAndSpeakWelcome, {
       once: true,
@@ -288,9 +306,10 @@ export function ChatClient({ initialName }: { initialName: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function speak(text: string) {
+  function speak(text: string, opts?: { autoListen?: boolean }) {
     if (!ttsSupported || typeof window === "undefined") return;
     ttsRetryRef.current = false;
+    autoListenAfterSpeakRef.current = Boolean(opts?.autoListen);
     setTtsErrorDetail(null);
     setTtsState("queued");
     try {
@@ -318,6 +337,19 @@ export function ChatClient({ initialName }: { initialName: string }) {
     utterance.onend = () => {
       setMicState("idle");
       setTtsState("ended");
+      if (autoListenAfterSpeakRef.current) {
+        autoListenAfterSpeakRef.current = false;
+        window.setTimeout(() => {
+          if (!recognitionRef.current) return;
+          try {
+            setVoiceBanner(null);
+            setMicState("listening");
+            recognitionRef.current.start();
+          } catch {
+            setMicState("idle");
+          }
+        }, 120);
+      }
     };
     utterance.onerror = (evt) => {
       setMicState("idle");
@@ -344,6 +376,19 @@ export function ChatClient({ initialName }: { initialName: string }) {
         fallback.onend = () => {
           setMicState("idle");
           setTtsState("ended");
+          if (autoListenAfterSpeakRef.current) {
+            autoListenAfterSpeakRef.current = false;
+            window.setTimeout(() => {
+              if (!recognitionRef.current) return;
+              try {
+                setVoiceBanner(null);
+                setMicState("listening");
+                recognitionRef.current.start();
+              } catch {
+                setMicState("idle");
+              }
+            }, 120);
+          }
         };
         fallback.onerror = () => {
           setMicState("idle");
@@ -397,12 +442,13 @@ export function ChatClient({ initialName }: { initialName: string }) {
       if (!res.ok) throw new Error(`Chat API failed (${res.status})`);
       const data = (await res.json()) as ChatApiResponse;
       setMessages((prev) => [...prev, { role: "assistant", text: data.response }]);
-      lastAssistantTextRef.current = data.response;
       setTraces(data.traces || []);
       setLastPayload(data.payload || null);
-      // Auto-voice only for mic-originated turns; text turns use Speak button.
-      if (shouldSpeakForThisTurn) {
-        speak(voiceTtsText(data));
+      // Hands-free voice mode: speak every assistant reply, then auto-listen.
+      if (hasUserInteractedRef.current && ttsSupported) {
+        speak(voiceTtsText(data), { autoListen: true });
+      } else if (shouldSpeakForThisTurn) {
+        speak(voiceTtsText(data), { autoListen: true });
       }
     } catch (e) {
       const msgText =
@@ -427,6 +473,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
+    hasUserInteractedRef.current = true;
+    welcomeSpeechPendingRef.current = false;
     void sendMessage(input);
   }
 
@@ -454,18 +502,6 @@ export function ChatClient({ initialName }: { initialName: string }) {
       setMicState("idle");
       setVoiceBanner("Could not start voice input. Please use text.");
     }
-  }
-
-  function onSpeakClick() {
-    if (!ttsSupported) {
-      setVoiceBanner("Text-to-speech is unavailable in this browser.");
-      return;
-    }
-    hasUserInteractedRef.current = true;
-    welcomeSpeechPendingRef.current = false;
-    const text = (lastAssistantTextRef.current || "").trim();
-    if (!text) return;
-    speak(text.slice(0, 420));
   }
 
   const processingText = inferProcessingText(input || messages.at(-1)?.text || "");
@@ -632,14 +668,6 @@ export function ChatClient({ initialName }: { initialName: string }) {
                 : micState === "speaking"
                   ? "Speaking"
                   : "Mic"}
-          </button>
-          <button
-            type="button"
-            onClick={onSpeakClick}
-            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
-            title="Read latest reply aloud"
-          >
-            Speak
           </button>
           <button
             type="submit"
