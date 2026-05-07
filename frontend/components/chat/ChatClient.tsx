@@ -239,10 +239,14 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const autoWelcomeAttemptedRef = useRef(false);
   const welcomeSpeechPendingRef = useRef(true);
   const ttsRetryRef = useRef(false);
+  const welcomeSpokenRef = useRef(false);
+  const speechStartTimeoutRef = useRef<number | null>(null);
+  const autoListenWatchdogRef = useRef<number | null>(null);
   const autoListenAfterSpeakRef = useRef(false);
   const autoListenQueuedRef = useRef(false);
   const isLoadingRef = useRef(false);
   const micStateRef = useRef<"idle" | "listening" | "processing" | "speaking">("idle");
+  const ttsStateRef = useRef<TtsState>("idle");
   const voiceRestartAttemptsRef = useRef(0);
 
   const backendBaseUrl = useMemo(
@@ -268,6 +272,21 @@ export function ChatClient({ initialName }: { initialName: string }) {
   useEffect(() => {
     micStateRef.current = micState;
   }, [micState]);
+
+  useEffect(() => {
+    ttsStateRef.current = ttsState;
+  }, [ttsState]);
+
+  useEffect(() => {
+    return () => {
+      if (speechStartTimeoutRef.current !== null) {
+        window.clearTimeout(speechStartTimeoutRef.current);
+      }
+      if (autoListenWatchdogRef.current !== null) {
+        window.clearTimeout(autoListenWatchdogRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const el = chatScrollRef.current;
@@ -398,6 +417,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
       unlockTts();
       if (
         autoWelcomeAttemptedRef.current &&
+        !welcomeSpokenRef.current &&
         typeof window !== "undefined" &&
         !window.speechSynthesis.speaking
       ) {
@@ -428,15 +448,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
     if (shouldAutoWelcome && hasSynthesis) {
       window.sessionStorage.removeItem("finn_autoplay_welcome");
       autoWelcomeAttemptedRef.current = true;
-      welcomeSpeechPendingRef.current = false;
       window.setTimeout(() => {
         speak(welcomeText, { autoListen: true });
       }, 250);
-      window.setTimeout(() => {
-        if (micStateRef.current === "idle" && !recognitionActiveRef.current) {
-          requestStartListening(0);
-        }
-      }, 1800);
     }
     const onVisibilityChange = () => {
       if (document.hidden) return;
@@ -502,6 +516,15 @@ export function ChatClient({ initialName }: { initialName: string }) {
     utterance.pitch = 1.02;
     utterance.volume = 1;
     utterance.onstart = () => {
+      if (speechStartTimeoutRef.current !== null) {
+        window.clearTimeout(speechStartTimeoutRef.current);
+        speechStartTimeoutRef.current = null;
+      }
+      if (cleanText === welcomeText) {
+        welcomeSpokenRef.current = true;
+        welcomeSpeechPendingRef.current = false;
+        autoWelcomeAttemptedRef.current = false;
+      }
       setMicState("speaking");
       setTtsState("started");
       setVoiceBanner(null);
@@ -516,6 +539,10 @@ export function ChatClient({ initialName }: { initialName: string }) {
       }
     };
     utterance.onerror = (evt) => {
+      if (speechStartTimeoutRef.current !== null) {
+        window.clearTimeout(speechStartTimeoutRef.current);
+        speechStartTimeoutRef.current = null;
+      }
       setMicState("idle");
       const detail = typeof evt.error === "string" ? evt.error : "unknown";
       // Browsers often emit interrupted/canceled when replacing active speech.
@@ -536,6 +563,15 @@ export function ChatClient({ initialName }: { initialName: string }) {
         fallback.pitch = 1.02;
         fallback.volume = 1;
         fallback.onstart = () => {
+          if (speechStartTimeoutRef.current !== null) {
+            window.clearTimeout(speechStartTimeoutRef.current);
+            speechStartTimeoutRef.current = null;
+          }
+          if (cleanText === welcomeText) {
+            welcomeSpokenRef.current = true;
+            welcomeSpeechPendingRef.current = false;
+            autoWelcomeAttemptedRef.current = false;
+          }
           setMicState("speaking");
           setTtsState("started");
           setVoiceBanner(null);
@@ -583,6 +619,18 @@ export function ChatClient({ initialName }: { initialName: string }) {
     window.setTimeout(() => {
       window.speechSynthesis.speak(utterance);
     }, 140);
+    speechStartTimeoutRef.current = window.setTimeout(() => {
+      if (ttsStateRef.current !== "started") {
+        setTtsState("error");
+        if (opts?.autoListen) {
+          autoListenQueuedRef.current = true;
+          requestStartListening(100);
+        }
+        if (autoWelcomeAttemptedRef.current && !welcomeSpokenRef.current) {
+          setVoiceBanner("Tap once to start voice mode.");
+        }
+      }
+    }, 1600);
   }
 
   async function sendMessage(text: string) {
@@ -634,6 +682,19 @@ export function ChatClient({ initialName }: { initialName: string }) {
     } finally {
       setIsLoading(false);
       setMicState((cur) => (cur === "processing" ? "idle" : cur));
+      if (autoListenWatchdogRef.current !== null) {
+        window.clearTimeout(autoListenWatchdogRef.current);
+      }
+      autoListenWatchdogRef.current = window.setTimeout(() => {
+        if (
+          hasUserInteractedRef.current &&
+          sttSupported &&
+          !recognitionActiveRef.current &&
+          micStateRef.current === "idle"
+        ) {
+          requestStartListening(0);
+        }
+      }, 2200);
     }
   }
 
