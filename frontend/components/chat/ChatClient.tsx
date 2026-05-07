@@ -160,6 +160,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const [micState, setMicState] = useState<"idle" | "listening" | "processing" | "speaking">("idle");
   const [ttsState, setTtsState] = useState<TtsState>("idle");
   const [ttsErrorDetail, setTtsErrorDetail] = useState<string | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const recognitionActiveRef = useRef(false);
   const synthesisUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
@@ -195,6 +196,12 @@ export function ChatClient({ initialName }: { initialName: string }) {
   useEffect(() => {
     micStateRef.current = micState;
   }, [micState]);
+
+  useEffect(() => {
+    const el = chatScrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [messages, isLoading]);
 
   function requestStartListening(delayMs = 0) {
     if (!sttSupported || !recognitionRef.current) return;
@@ -331,6 +338,18 @@ export function ChatClient({ initialName }: { initialName: string }) {
       }
       requestStartListening();
     };
+
+    const shouldAutoWelcome =
+      typeof window !== "undefined" &&
+      window.sessionStorage.getItem("finn_autoplay_welcome") === "1";
+    if (shouldAutoWelcome && hasSynthesis) {
+      window.sessionStorage.removeItem("finn_autoplay_welcome");
+      hasUserInteractedRef.current = true;
+      welcomeSpeechPendingRef.current = false;
+      window.setTimeout(() => {
+        speak(welcomeText, { autoListen: true });
+      }, 250);
+    }
     window.addEventListener("pointerdown", markInteractedAndSpeakWelcome, {
       once: true,
     });
@@ -590,7 +609,10 @@ export function ChatClient({ initialName }: { initialName: string }) {
           <span>Advisor hours: Mon–Fri, 9:00 AM–6:00 PM IST</span>
         </div>
 
-        <div className="max-h-[420px] min-h-[420px] space-y-3 overflow-auto rounded-xl border border-slate-100 bg-slate-50 p-3">
+        <div
+          ref={chatScrollRef}
+          className="max-h-[420px] min-h-[420px] space-y-3 overflow-auto rounded-xl border border-slate-100 bg-slate-50 p-3"
+        >
           {messages.map((m, idx) => (
             <div
               key={`${m.role}-${idx}`}

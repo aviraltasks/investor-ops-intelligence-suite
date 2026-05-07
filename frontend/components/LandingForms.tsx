@@ -12,6 +12,9 @@ export function LandingForms() {
     e.preventDefault();
     const name = firstName.trim();
     if (!name) return;
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem("finn_autoplay_welcome", "1");
+    }
     router.push(`/chat?name=${encodeURIComponent(name)}`);
   }
 

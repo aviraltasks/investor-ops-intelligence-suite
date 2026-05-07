@@ -13,6 +13,7 @@ from app.llm.client import chat_completion_safe, llm_available, parse_json_objec
 from app.db.models import RagChunk
 from app.rag.embed import get_embedder
 from app.rag.search import search_chunks
+from app.sources.manifest import FUND_SOURCES
 
 _FAQ_ANSWER_CACHE: dict[str, tuple[str, list[str]]] = {}
 _FAQ_CACHE_MAX = 300
@@ -286,6 +287,29 @@ def _deterministic_faq_answer(session: Session, query: str) -> tuple[str, list[s
     return None
 
 
+def _deterministic_coverage_answer(query: str) -> tuple[str, list[str]] | None:
+    q = query.lower()
+    if not (
+        ("what" in q or "which" in q or "list" in q)
+        and ("fund" in q or "mutual fund" in q or "schemes" in q)
+        and any(k in q for k in ("cover", "covered", "database", "available", "have"))
+    ):
+        return None
+    names = [f.display_name for f in FUND_SOURCES]
+    if not names:
+        return None
+    preview = ", ".join(names[:8])
+    extra = len(names) - 8
+    if extra > 0:
+        preview = f"{preview}, and {extra} more."
+    answer = _two_sentences(
+        f"We currently cover {len(names)} mutual funds in our indexed dataset, including {preview} "
+        "I can also compare specific funds for NAV, expense ratio, or exit load."
+    )
+    sources = [f.url for f in FUND_SOURCES[:2]]
+    return answer, sources
+
+
 def _merge_hits(session: Session, queries: list[str], top_per: int = 4) -> list[dict[str, Any]]:
     seen: set[str] = set()
     merged: list[dict[str, Any]] = []
@@ -335,6 +359,25 @@ def answer_faq(session: Session, query: str) -> AgentResult:
             )
         )
         out = _compact(answer_body, max_len=260)
+        src_block = _format_sources(det_sources)
+        if src_block:
+            out = f"{out}\n\n{src_block}"
+        return AgentResult(response_text=out, payload={"sources": det_sources[:2], "confidence": "high"}, traces=traces)
+
+    deterministic_coverage = _deterministic_coverage_answer(query)
+    if deterministic_coverage:
+        answer_body, det_sources = deterministic_coverage
+        _cache_set(query, answer_body, det_sources)
+        traces.append(
+            AgentTraceStep(
+                agent="rag_agent",
+                reasoning_brief="Answered source-coverage query deterministically to avoid noisy synthesis.",
+                tools=["faq.coverage_fast_path"],
+                replanned=False,
+                outcome="coverage_fast_path",
+            )
+        )
+        out = _compact(answer_body, max_len=320)
         src_block = _format_sources(det_sources)
         if src_block:
             out = f"{out}\n\n{src_block}"

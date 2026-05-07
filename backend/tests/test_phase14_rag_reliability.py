@@ -170,3 +170,21 @@ def test_deterministic_expense_ratio_comparison(monkeypatch, tmp_path) -> None:
         assert "expense ratio comparison" in text.lower()
         assert "0.72%" in text and "0.89%" in text and "0.64%" in text
         assert "Sources:" in text
+
+
+def test_deterministic_funds_covered_answer(monkeypatch, tmp_path) -> None:
+    db_file = tmp_path / "phase14_covered.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("EMBEDDING_MODEL", "hash")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    reset_settings()
+    reset_engine()
+
+    with TestClient(app) as client:
+        _seed_chunks()
+        out = _post_chat(client, "what all Mutual funds do you cover", session_id="p14-cover")
+        text = out["response"]
+        assert "we currently cover" in text.lower()
+        assert "mutual funds" in text.lower()
+        assert "Sources:" in text
