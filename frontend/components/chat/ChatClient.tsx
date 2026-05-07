@@ -206,6 +206,25 @@ function isVoiceSpeakingState(state: VoiceModeState): boolean {
   return state === "speaking_welcome" || state === "speaking_reply";
 }
 
+function normalizeForEcho(text: string): string {
+  return (text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isLikelyTtsEcho(transcript: string, assistantTexts: string[]): boolean {
+  const t = normalizeForEcho(transcript);
+  if (!t || t.length < 12) return false;
+  for (const src of assistantTexts) {
+    const s = normalizeForEcho(src);
+    if (!s) continue;
+    if (s.includes(t) || t.includes(s.slice(0, Math.min(80, s.length)))) return true;
+  }
+  return false;
+}
+
 function pickPreferredVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
   if (!voices.length) return null;
   const normalized = voices.map((v) => ({
@@ -409,6 +428,19 @@ export function ChatClient({ initialName }: { initialName: string }) {
       recognition.onresult = (evt: SpeechRecognitionEventLike) => {
         const transcript = evt.results?.[0]?.[0]?.transcript?.trim();
         if (!transcript) {
+          setMicState("idle");
+          return;
+        }
+        const assistantCandidates = [
+          welcomeText,
+          messages
+            .slice()
+            .reverse()
+            .find((m) => m.role === "assistant")?.text || "",
+        ];
+        if (isLikelyTtsEcho(transcript, assistantCandidates)) {
+          setVoiceBanner("I caught my own voice. Please speak now.");
+          autoListenQueuedRef.current = true;
           setMicState("idle");
           return;
         }

@@ -157,6 +157,20 @@ def _compact_reply(text: str, *, max_len: int = 200) -> str:
     return concise
 
 
+def _should_skip_memory_fact(message: str) -> bool:
+    t = re.sub(r"\s+", " ", (message or "").lower()).strip()
+    if not t:
+        return True
+    # Ignore likely bot-echo captures from voice mode.
+    echo_markers = (
+        "i provide factual mutual fund information",
+        "i do not provide investment advice",
+        "help schedule advisor appointments",
+        "mandatory advisor appointments",
+    )
+    return any(m in t for m in echo_markers)
+
+
 def handle_chat_turn(session: Session, session_id: str, user_name: str, message: str) -> AgentResult:
     traces: list[AgentTraceStep] = []
     payload: dict[str, Any] = {}
@@ -405,8 +419,9 @@ def handle_chat_turn(session: Session, session_id: str, user_name: str, message:
         payload["advisor_email_draft"] = email.payload
 
     # Save memory fact for continuity.
-    fact_value = sanitized_message[:300]
-    traces.append(save_fact(session, session_id, user_name or "User", "last_user_message", fact_value))
+    if not _should_skip_memory_fact(sanitized_message):
+        fact_value = sanitized_message[:300]
+        traces.append(save_fact(session, session_id, user_name or "User", "last_user_message", fact_value))
 
     final_text = "\n\n".join([r for r in responses if r]).strip()
     if not final_text:
