@@ -148,16 +148,37 @@ def _extract_time_ist(text: str) -> tuple[str, str] | None:
         day = day + timedelta(days=7)
         while day.weekday() >= 5:
             day = day + timedelta(days=1)
-    m = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", t)
+    m = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", t)
     if not m:
-        return None
-    hh = int(m.group(1))
-    mm = int(m.group(2) or 0)
-    ampm = m.group(3)
-    if ampm == "pm" and hh < 12:
-        hh += 12
-    if ampm == "am" and hh == 12:
-        hh = 0
+        compact = re.search(r"\b(\d{3,4})\s*(am|pm)\b", t)
+        if compact:
+            raw = compact.group(1)
+            ampm = compact.group(2)
+            if len(raw) == 3:
+                hh = int(raw[0])
+                mm = int(raw[1:])
+            else:
+                hh = int(raw[:2])
+                mm = int(raw[2:])
+            if ampm == "pm" and hh < 12:
+                hh += 12
+            if ampm == "am" and hh == 12:
+                hh = 0
+            m = None
+        else:
+            m = re.search(r"\b(\d{1,2})(?::(\d{2}))?\b", t)
+            if not m:
+                return None
+            hh = int(m.group(1))
+            mm = int(m.group(2) or 0)
+    if m:
+        hh = int(m.group(1))
+        mm = int(m.group(2) or 0)
+        ampm = m.group(3)
+        if ampm == "pm" and hh < 12:
+            hh += 12
+        if ampm == "am" and hh == 12:
+            hh = 0
     if hh < 9 or hh > 18:
         return None
     if hh == 18 and mm > 0:

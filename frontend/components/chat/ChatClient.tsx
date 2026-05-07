@@ -142,6 +142,26 @@ function inferProcessingText(input: string): string {
   return "Searching knowledge base...";
 }
 
+function pickPreferredVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
+  if (!voices.length) return null;
+  const normalized = voices.map((v) => ({
+    voice: v,
+    lang: (v.lang || "").toLowerCase(),
+    name: (v.name || "").toLowerCase(),
+  }));
+  const femaleHint = /(female|samantha|zira|aria|natasha|heera|veena|alloy)/;
+  const premiumHint = /(neural|natural|wavenet|google|microsoft|enhanced|premium)/;
+  return (
+    normalized.find((v) => v.lang.startsWith("en-in") && femaleHint.test(v.name) && premiumHint.test(v.name))?.voice ||
+    normalized.find((v) => v.lang.startsWith("en-in") && femaleHint.test(v.name))?.voice ||
+    normalized.find((v) => v.lang.startsWith("en") && femaleHint.test(v.name) && premiumHint.test(v.name))?.voice ||
+    normalized.find((v) => v.lang.startsWith("en") && femaleHint.test(v.name))?.voice ||
+    normalized.find((v) => v.lang.startsWith("en-in") && premiumHint.test(v.name))?.voice ||
+    normalized.find((v) => v.lang.startsWith("en"))?.voice ||
+    normalized[0].voice
+  );
+}
+
 export function ChatClient({ initialName }: { initialName: string }) {
   const welcomeText = `Hi ${initialName}! I provide factual mutual fund information and help schedule advisor appointments. I do not provide investment advice or handle personal account details in this chat.`;
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -169,6 +189,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const synthesisUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const preferredVoiceRef = useRef<VoicePick | null>(null);
   const hasUserInteractedRef = useRef(false);
+  const autoWelcomeAttemptedRef = useRef(false);
   const welcomeSpeechPendingRef = useRef(true);
   const ttsRetryRef = useRef(false);
   const autoListenAfterSpeakRef = useRef(false);
@@ -304,20 +325,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
       if (typeof window === "undefined" || !window.speechSynthesis) return;
       const voices = window.speechSynthesis.getVoices();
       if (!voices.length) return;
-      const normalized = voices.map((v) => ({
-        voice: v,
-        lang: (v.lang || "").toLowerCase(),
-        name: (v.name || "").toLowerCase(),
-      }));
-      const ranked =
-        normalized.find((v) => v.lang.startsWith("en-in") && /neural|natural|wavenet|samantha|zira|aria|google|microsoft/.test(v.name)) ||
-        normalized.find((v) => v.lang.startsWith("en-in")) ||
-        normalized.find((v) => v.lang.startsWith("en") && /neural|natural|wavenet|samantha|zira|aria|google|microsoft/.test(v.name)) ||
-        normalized.find((v) => v.lang.startsWith("en")) ||
-        normalized[0];
-      preferredVoiceRef.current = ranked
-        ? { name: ranked.voice.name, lang: ranked.voice.lang }
-        : null;
+      const ranked = pickPreferredVoice(voices);
+      preferredVoiceRef.current = ranked ? { name: ranked.name, lang: ranked.lang } : null;
     };
     choosePreferredVoice();
     window.speechSynthesis.onvoiceschanged = choosePreferredVoice;
@@ -355,7 +364,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
       window.sessionStorage.getItem("finn_autoplay_welcome") === "1";
     if (shouldAutoWelcome && hasSynthesis) {
       window.sessionStorage.removeItem("finn_autoplay_welcome");
-      hasUserInteractedRef.current = true;
+      autoWelcomeAttemptedRef.current = true;
       welcomeSpeechPendingRef.current = false;
       window.setTimeout(() => {
         speak(welcomeText, { autoListen: true });
@@ -416,7 +425,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
     const selectedVoice =
       window.speechSynthesis
         .getVoices()
-        .find((v) => preferred && v.name === preferred.name && v.lang === preferred.lang) || null;
+        .find((v) => preferred && v.name === preferred.name && v.lang === preferred.lang) ||
+      pickPreferredVoice(window.speechSynthesis.getVoices());
     if (selectedVoice) utterance.voice = selectedVoice;
     utterance.rate = 1;
     utterance.pitch = 1;
@@ -443,6 +453,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
       if (detail === "interrupted" || detail === "canceled") {
         setTtsState("ended");
         setTtsErrorDetail(null);
+        if (autoWelcomeAttemptedRef.current && !hasUserInteractedRef.current) {
+          setVoiceBanner("Tap anywhere once to enable voice in this browser.");
+        }
         return;
       }
       if (!ttsRetryRef.current) {
@@ -470,6 +483,10 @@ export function ChatClient({ initialName }: { initialName: string }) {
           setMicState("idle");
           setTtsState("error");
           setTtsErrorDetail(detail);
+          if (autoWelcomeAttemptedRef.current && !hasUserInteractedRef.current) {
+            setVoiceBanner("Tap anywhere once to enable voice in this browser.");
+            return;
+          }
           setVoiceBanner("Text-to-speech failed. You can continue in text mode.");
         };
         window.setTimeout(() => {
@@ -484,6 +501,10 @@ export function ChatClient({ initialName }: { initialName: string }) {
       }
       setTtsState("error");
       setTtsErrorDetail(detail);
+      if (autoWelcomeAttemptedRef.current && !hasUserInteractedRef.current) {
+        setVoiceBanner("Tap anywhere once to enable voice in this browser.");
+        return;
+      }
       setVoiceBanner("Text-to-speech failed. You can continue in text mode.");
     };
     synthesisUtteranceRef.current = utterance;
@@ -630,7 +651,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
 
         <div
           ref={chatScrollRef}
-          className="max-h-[420px] min-h-[420px] space-y-3 overflow-auto rounded-xl border border-slate-100 bg-slate-50 p-3"
+          className="h-[420px] space-y-3 overflow-auto rounded-xl border border-slate-100 bg-slate-50 p-3"
         >
           {messages.map((m, idx) => (
             <div

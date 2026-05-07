@@ -100,7 +100,20 @@ def _is_prompt_injection_attempt(text: str) -> bool:
     )
 
 
-def _compact_reply(text: str, *, max_len: int = 280) -> str:
+def _is_name_query(text: str) -> bool:
+    t = (text or "").lower()
+    return any(
+        p in t
+        for p in (
+            "what is your name",
+            "what's your name",
+            "who are you",
+            "your name",
+        )
+    )
+
+
+def _compact_reply(text: str, *, max_len: int = 200) -> str:
     body = (text or "").strip()
     if not body:
         return ""
@@ -207,6 +220,21 @@ def handle_chat_turn(session: Session, session_id: str, user_name: str, message:
                 ),
             ],
             payload={"intents": ["safety"]},
+        )
+
+    if _is_name_query(sanitized_message):
+        return AgentResult(
+            response_text="I am Finn, your mutual-fund support and advisor-scheduling assistant.",
+            traces=[
+                *traces,
+                AgentTraceStep(
+                    agent="orchestrator",
+                    reasoning_brief="Handled identity query directly with concise assistant introduction.",
+                    tools=["identity_reply"],
+                    outcome="identity_answer",
+                ),
+            ],
+            payload={"intents": ["general"]},
         )
 
     allowed = {"faq", "scheduling", "memory_recall", "review_context", "general"}

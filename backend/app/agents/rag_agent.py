@@ -386,6 +386,20 @@ def _deterministic_coverage_answer(query: str) -> tuple[str, list[str]] | None:
     return answer, sources
 
 
+def _deterministic_fund_only_prompt(query: str) -> tuple[str, list[str]] | None:
+    q = (query or "").strip().lower()
+    if not q or len(q.split()) > 8:
+        return None
+    has_fund = _query_has_specific_fund(q)
+    has_metric = any(k in q for k in ("nav", "expense ratio", "exit load", "aum"))
+    if not has_fund or has_metric:
+        return None
+    answer = _two_sentences(
+        "Got it. Please tell me what you want for this fund: NAV, expense ratio, exit load, or AUM."
+    )
+    return answer, []
+
+
 def _merge_hits(session: Session, queries: list[str], top_per: int = 4) -> list[dict[str, Any]]:
     seen: set[str] = set()
     merged: list[dict[str, Any]] = []
@@ -476,6 +490,21 @@ def answer_faq(session: Session, query: str) -> AgentResult:
         src_block = _format_sources(det_sources)
         if src_block:
             out = f"{out}\n\n{src_block}"
+        return AgentResult(response_text=out, payload={"sources": det_sources[:1], "confidence": "high"}, traces=traces)
+
+    fund_only = _deterministic_fund_only_prompt(query)
+    if fund_only:
+        answer_body, det_sources = fund_only
+        traces.append(
+            AgentTraceStep(
+                agent="rag_agent",
+                reasoning_brief="Detected fund-only follow-up and asked user for one specific metric.",
+                tools=["faq.fund_metric_clarifier"],
+                replanned=False,
+                outcome="clarification_prompt",
+            )
+        )
+        out = _compact(answer_body, max_len=180)
         return AgentResult(response_text=out, payload={"sources": det_sources[:1], "confidence": "high"}, traces=traces)
 
     if llm_available():

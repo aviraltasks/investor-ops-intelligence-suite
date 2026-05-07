@@ -83,3 +83,6 @@ def test_empty_and_emoji_input_handling(monkeypatch, tmp_path) -> None:
 
         emoji = _chat(client, "🙂🙂🙂", session_id="input-1")
         assert "I can help" in emoji["response"]
+
+        name_q = _chat(client, "what is your name", session_id="input-1")
+        assert "I am Finn" in name_q["response"]

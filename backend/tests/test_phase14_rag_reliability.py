@@ -221,3 +221,20 @@ def test_metric_without_fund_requests_fund_name(monkeypatch, tmp_path) -> None:
         out = _post_chat(client, "what is the expense ratio", session_id="p14-metric-clarify")
         text = out["response"].lower()
         assert "share the fund name" in text or "fund name first" in text
+
+
+def test_fund_only_query_asks_metric(monkeypatch, tmp_path) -> None:
+    db_file = tmp_path / "phase14_fund_only.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("EMBEDDING_MODEL", "hash")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    reset_settings()
+    reset_engine()
+
+    with TestClient(app) as client:
+        _seed_chunks()
+        out = _post_chat(client, "Nippon India large cap", session_id="p14-fund-only")
+        text = out["response"].lower()
+        assert "what you want for this fund" in text
+        assert "nav" in text and "expense ratio" in text
