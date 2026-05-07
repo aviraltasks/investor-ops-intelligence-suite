@@ -18,6 +18,13 @@ class LLMResponse:
 
 
 def llm_available() -> bool:
+    # Keep automated tests deterministic even when developer machine has live API keys.
+    if os.getenv("PYTEST_CURRENT_TEST") and (os.getenv("ENABLE_LLM_IN_PYTEST") or "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return False
     return bool((os.getenv("GROQ_API_KEY") or "").strip() or (os.getenv("GEMINI_API_KEY") or "").strip())
 
 

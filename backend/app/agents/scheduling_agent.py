@@ -145,8 +145,13 @@ def _extract_time_ist(text: str) -> tuple[str, str] | None:
         return None
     if "tomorrow" in t:
         day = day + timedelta(days=1)
+        # UX-friendly interpretation: if "tomorrow" lands on weekend, move to next business day.
+        while day.weekday() >= 5:
+            day = day + timedelta(days=1)
     if "next week" in t:
         day = day + timedelta(days=7)
+        while day.weekday() >= 5:
+            day = day + timedelta(days=1)
     hh = 10
     mm = 0
     m = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", t)
