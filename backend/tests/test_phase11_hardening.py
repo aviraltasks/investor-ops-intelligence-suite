@@ -78,6 +78,27 @@ def test_scheduling_time_and_cancellation_edges(monkeypatch, tmp_path) -> None:
         assert "already cancelled" in second_cancel["response"]
 
 
+def test_booking_followup_time_merges_into_scheduling(monkeypatch, tmp_path) -> None:
+    """Omitting date/time on first line then sending '1pm' must stay in scheduling, not general/memory."""
+    db_file = tmp_path / "phase11_book_followup.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("EMBEDDING_MODEL", "hash")
+    reset_settings()
+    reset_engine()
+
+    with TestClient(app) as client:
+        sid = "book-follow-1"
+        a = _chat(client, "book appointment", session_id=sid)
+        assert "weekday time" in a["response"].lower() or "ist" in a["response"].lower()
+        assert a["payload"].get("status") == "needs_time_clarification"
+        b = _chat(client, "1pm", session_id=sid)
+        low = b["response"].lower()
+        assert "welcome back" not in low
+        assert "last time we discussed" not in low
+        assert b["payload"].get("status") in ("needs_time_clarification", "awaiting_confirmation")
+        assert "confirm booking" in low or "weekday" in low or "date" in low or "ist" in low
+
+
 def test_empty_and_emoji_input_handling(monkeypatch, tmp_path) -> None:
     db_file = tmp_path / "phase11_input.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")

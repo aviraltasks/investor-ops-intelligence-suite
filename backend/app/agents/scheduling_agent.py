@@ -12,7 +12,13 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.agents.memory_agent import clear_pending_schedule_confirm, get_pending_schedule_confirm, save_pending_schedule_confirm
+from app.agents.memory_agent import (
+    clear_pending_schedule_confirm,
+    clear_pending_scheduling_clarify,
+    get_pending_schedule_confirm,
+    save_pending_schedule_confirm,
+    save_pending_scheduling_clarify,
+)
 from app.agents.types import AgentResult, AgentTraceStep
 from app.db.models import Booking
 from app.integrations.service import sync_booking_cancelled, sync_booking_created
@@ -1204,6 +1210,12 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
             guidance = "That looks like a past slot. Please share a future weekday date and time in IST."
         elif slot_reason == "ambiguous_time":
             guidance = "Please share a specific weekday date and time in IST (example: tomorrow at 10 am)."
+        save_pending_scheduling_clarify(
+            session,
+            session_id,
+            user_name or "User",
+            {"rolling_text": message.strip()},
+        )
         return AgentResult(
             response_text=(guidance + waitlist_hint),
             traces=[
@@ -1216,6 +1228,7 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
             ],
             payload={"status": "needs_time_clarification"},
         )
+    clear_pending_scheduling_clarify(session, session_id)
     date_str, time_ist = slot
 
     conflict = session.scalar(

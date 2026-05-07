@@ -9,7 +9,12 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.agents.email_agent import draft_advisor_email
-from app.agents.memory_agent import get_pending_schedule_confirm, load_context, save_fact
+from app.agents.memory_agent import (
+    get_pending_schedule_confirm,
+    get_pending_scheduling_clarify,
+    load_context,
+    save_fact,
+)
 from app.agents.rag_agent import answer_faq
 from app.agents.review_intel_agent import get_trending_context
 from app.agents.scheduling_agent import (
@@ -115,6 +120,40 @@ def _is_name_query(text: str) -> bool:
             "your name",
         )
     )
+
+
+def _looks_like_scheduling_followup_fragment(text: str) -> bool:
+    """Short follow-up while clarifying booking time (avoids merging FAQ questions into book flow)."""
+    t = (text or "").strip().lower()
+    if not t or len(t) > 72:
+        return False
+    if re.search(r"\b(\d{1,2})(:\d{2})?\s*(am|pm|a\.m\.|p\.m\.)\b", t):
+        return True
+    if re.search(r"\b\d{1,2}\s*(am|pm)\b", t):
+        return True
+    if re.search(r"\b\d{3,4}\s*(am|pm)\b", t):
+        return True
+    if any(
+        w in t
+        for w in (
+            "tomorrow",
+            "today",
+            "next week",
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "yeah",
+            "yes",
+            "yup",
+            "ok",
+            "okay",
+            "sure",
+        )
+    ):
+        return True
+    return False
 
 
 def _is_brief_greeting(text: str) -> bool:
@@ -224,6 +263,24 @@ def handle_chat_turn(session: Session, session_id: str, user_name: str, message:
         is_scheduling_confirmation_message(sanitized_message)
         or is_scheduling_rejection_message(sanitized_message)
     )
+
+    clarify_snapshot = get_pending_scheduling_clarify(session, session_id)
+    if (
+        clarify_snapshot
+        and not pending_confirm
+        and _looks_like_scheduling_followup_fragment(sanitized_message)
+    ):
+        rt = str(clarify_snapshot.get("rolling_text") or "").strip()
+        if rt:
+            sanitized_message = f"{rt} {sanitized_message}".strip()
+            traces.append(
+                AgentTraceStep(
+                    agent="orchestrator",
+                    reasoning_brief="Merged time/date follow-up with prior booking utterance so scheduling agent can parse slot.",
+                    tools=["scheduling.clarify_merge"],
+                    outcome="scheduling_context_merge",
+                )
+            )
 
     if _has_pii(sanitized_message):
         return AgentResult(

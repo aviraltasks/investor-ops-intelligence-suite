@@ -13,6 +13,7 @@ from app.db.models import Booking, MemoryFact
 from app.agents.types import AgentTraceStep
 
 PENDING_SCHEDULE_CONFIRM_KEY = "pending_schedule_confirm"
+PENDING_SCHEDULING_CLARIFY_KEY = "pending_scheduling_clarify"
 
 
 def _normalized_user_name(user_name: str) -> str:
@@ -118,6 +119,44 @@ def save_pending_schedule_confirm(session: Session, session_id: str, user_name: 
 def clear_pending_schedule_confirm(session: Session, session_id: str) -> None:
     session.execute(
         delete(MemoryFact).where(MemoryFact.session_id == session_id).where(MemoryFact.key == PENDING_SCHEDULE_CONFIRM_KEY)
+    )
+    session.commit()
+
+
+def get_pending_scheduling_clarify(session: Session, session_id: str) -> dict[str, Any] | None:
+    """Rolling text while user is filling date/time after a book intent (needs_time_clarification)."""
+    fact = session.scalar(
+        select(MemoryFact)
+        .where(MemoryFact.session_id == session_id)
+        .where(MemoryFact.key == PENDING_SCHEDULING_CLARIFY_KEY)
+        .order_by(desc(MemoryFact.created_at))
+        .limit(1)
+    )
+    if not fact or not fact.value:
+        return None
+    try:
+        out = json.loads(fact.value)
+        return out if isinstance(out, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
+def save_pending_scheduling_clarify(session: Session, session_id: str, user_name: str, payload: dict[str, Any]) -> None:
+    normalized_user = _normalized_user_name(user_name)
+    session.add(
+        MemoryFact(
+            session_id=session_id,
+            user_name=normalized_user,
+            key=PENDING_SCHEDULING_CLARIFY_KEY,
+            value=json.dumps(payload),
+        )
+    )
+    session.commit()
+
+
+def clear_pending_scheduling_clarify(session: Session, session_id: str) -> None:
+    session.execute(
+        delete(MemoryFact).where(MemoryFact.session_id == session_id).where(MemoryFact.key == PENDING_SCHEDULING_CLARIFY_KEY)
     )
     session.commit()
 
