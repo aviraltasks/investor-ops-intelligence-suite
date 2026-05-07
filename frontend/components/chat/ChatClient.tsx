@@ -161,13 +161,16 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const [ttsState, setTtsState] = useState<TtsState>("idle");
   const [ttsErrorDetail, setTtsErrorDetail] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const recognitionActiveRef = useRef(false);
   const synthesisUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const preferredVoiceRef = useRef<VoicePick | null>(null);
-  const voiceTurnPendingRef = useRef(false);
   const hasUserInteractedRef = useRef(false);
   const welcomeSpeechPendingRef = useRef(true);
   const ttsRetryRef = useRef(false);
   const autoListenAfterSpeakRef = useRef(false);
+  const autoListenQueuedRef = useRef(false);
+  const isLoadingRef = useRef(false);
+  const micStateRef = useRef<"idle" | "listening" | "processing" | "speaking">("idle");
 
   const backendBaseUrl = useMemo(
     () => process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000",
@@ -184,6 +187,42 @@ export function ChatClient({ initialName }: { initialName: string }) {
       }).format(new Date()),
     [],
   );
+
+  useEffect(() => {
+    isLoadingRef.current = isLoading;
+  }, [isLoading]);
+
+  useEffect(() => {
+    micStateRef.current = micState;
+  }, [micState]);
+
+  function requestStartListening(delayMs = 0) {
+    if (!sttSupported || !recognitionRef.current) return;
+    if (isLoadingRef.current || micStateRef.current === "processing" || micStateRef.current === "speaking") return;
+    const run = () => {
+      if (!recognitionRef.current || recognitionActiveRef.current) return;
+      try {
+        setVoiceBanner(null);
+        recognitionRef.current.start();
+      } catch {
+        setMicState("idle");
+      }
+    };
+    if (delayMs > 0) {
+      window.setTimeout(run, delayMs);
+      return;
+    }
+    run();
+  }
+
+  function stopListening() {
+    if (!recognitionRef.current) return;
+    try {
+      recognitionRef.current.stop();
+    } catch {
+      // noop
+    }
+  }
 
   useEffect(() => {
     const SpeechRecognitionCtor = (() => {
@@ -212,22 +251,32 @@ export function ChatClient({ initialName }: { initialName: string }) {
       recognition.interimResults = false;
       recognition.maxAlternatives = 1;
 
-      recognition.onstart = () => setMicState("listening");
+      recognition.onstart = () => {
+        recognitionActiveRef.current = true;
+        setMicState("listening");
+      };
       recognition.onresult = (evt: SpeechRecognitionEventLike) => {
         const transcript = evt.results?.[0]?.[0]?.transcript?.trim();
         if (!transcript) {
           setMicState("idle");
           return;
         }
-        voiceTurnPendingRef.current = true;
+        autoListenQueuedRef.current = false;
         setMicState("processing");
         void sendMessage(transcript);
       };
       recognition.onerror = () => {
+        recognitionActiveRef.current = false;
         setMicState("idle");
         setVoiceBanner("Voice input failed. Switched to text mode.");
       };
       recognition.onend = () => {
+        recognitionActiveRef.current = false;
+        if (autoListenQueuedRef.current) {
+          autoListenQueuedRef.current = false;
+          requestStartListening(140);
+          return;
+        }
         setMicState((cur) => (cur === "listening" ? "idle" : cur));
       };
       recognitionRef.current = recognition;
@@ -269,16 +318,6 @@ export function ChatClient({ initialName }: { initialName: string }) {
         // noop
       }
     };
-    const startListening = () => {
-      if (!recognitionRef.current) return;
-      try {
-        setVoiceBanner(null);
-        setMicState("listening");
-        recognitionRef.current.start();
-      } catch {
-        setMicState("idle");
-      }
-    };
     const markInteractedAndSpeakWelcome = () => {
       if (hasUserInteractedRef.current) return;
       hasUserInteractedRef.current = true;
@@ -290,7 +329,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
           return;
         }
       }
-      startListening();
+      requestStartListening();
     };
     window.addEventListener("pointerdown", markInteractedAndSpeakWelcome, {
       once: true,
@@ -323,10 +362,14 @@ export function ChatClient({ initialName }: { initialName: string }) {
     autoListenAfterSpeakRef.current = Boolean(opts?.autoListen);
     setTtsErrorDetail(null);
     setTtsState("queued");
+    autoListenQueuedRef.current = false;
     try {
       window.speechSynthesis.resume();
     } catch {
       // noop
+    }
+    if (recognitionActiveRef.current) {
+      stopListening();
     }
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
@@ -350,16 +393,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
       setTtsState("ended");
       if (autoListenAfterSpeakRef.current) {
         autoListenAfterSpeakRef.current = false;
-        window.setTimeout(() => {
-          if (!recognitionRef.current) return;
-          try {
-            setVoiceBanner(null);
-            setMicState("listening");
-            recognitionRef.current.start();
-          } catch {
-            setMicState("idle");
-          }
-        }, 120);
+        autoListenQueuedRef.current = true;
+        requestStartListening(120);
       }
     };
     utterance.onerror = (evt) => {
@@ -389,16 +424,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
           setTtsState("ended");
           if (autoListenAfterSpeakRef.current) {
             autoListenAfterSpeakRef.current = false;
-            window.setTimeout(() => {
-              if (!recognitionRef.current) return;
-              try {
-                setVoiceBanner(null);
-                setMicState("listening");
-                recognitionRef.current.start();
-              } catch {
-                setMicState("idle");
-              }
-            }, 120);
+            autoListenQueuedRef.current = true;
+            requestStartListening(120);
           }
         };
         fallback.onerror = () => {
@@ -435,7 +462,6 @@ export function ChatClient({ initialName }: { initialName: string }) {
     if (welcomeSpeechPendingRef.current) {
       welcomeSpeechPendingRef.current = false;
     }
-    const shouldSpeakForThisTurn = voiceTurnPendingRef.current;
     setError(null);
     setMessages((prev) => [...prev, { role: "user", text: msg }]);
     setInput("");
@@ -458,8 +484,6 @@ export function ChatClient({ initialName }: { initialName: string }) {
       // Hands-free voice mode: speak every assistant reply, then auto-listen.
       if (hasUserInteractedRef.current && ttsSupported) {
         speak(voiceTtsText(data), { autoListen: true });
-      } else if (shouldSpeakForThisTurn) {
-        speak(voiceTtsText(data), { autoListen: true });
       }
     } catch (e) {
       const msgText =
@@ -472,12 +496,13 @@ export function ChatClient({ initialName }: { initialName: string }) {
           text: "I’m having trouble reaching the backend right now. Please try again in a moment.",
         },
       ]);
-      if (shouldSpeakForThisTurn) {
-        speak("I am having trouble reaching the backend right now. Please try again.");
+      if (hasUserInteractedRef.current && ttsSupported) {
+        speak("I am having trouble reaching the backend right now. Please try again.", {
+          autoListen: true,
+        });
       }
     } finally {
       setIsLoading(false);
-      voiceTurnPendingRef.current = false;
       setMicState((cur) => (cur === "processing" ? "idle" : cur));
     }
   }
@@ -501,18 +526,13 @@ export function ChatClient({ initialName }: { initialName: string }) {
       return;
     }
     if (micState === "listening") {
-      recognitionRef.current.stop();
+      autoListenQueuedRef.current = false;
+      stopListening();
       setMicState("idle");
       return;
     }
-    try {
-      setVoiceBanner(null);
-      setMicState("listening");
-      recognitionRef.current.start();
-    } catch {
-      setMicState("idle");
-      setVoiceBanner("Could not start voice input. Please use text.");
-    }
+    autoListenQueuedRef.current = false;
+    requestStartListening();
   }
 
   const processingText = inferProcessingText(input || messages.at(-1)?.text || "");
