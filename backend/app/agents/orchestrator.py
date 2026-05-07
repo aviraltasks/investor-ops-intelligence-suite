@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.agents.email_agent import draft_advisor_email
 from app.agents.memory_agent import (
+    clear_pending_schedule_confirm,
+    clear_pending_scheduling_clarify,
     get_pending_schedule_confirm,
     get_pending_scheduling_clarify,
     load_context,
@@ -18,6 +20,7 @@ from app.agents.memory_agent import (
 from app.agents.rag_agent import answer_faq
 from app.agents.review_intel_agent import get_trending_context
 from app.agents.scheduling_agent import (
+    booking_context_prefix_for_topic,
     handle_scheduling,
     is_scheduling_confirmation_message,
     is_scheduling_rejection_message,
@@ -26,6 +29,7 @@ from app.agents.scheduling_agent import (
 from app.agents.topic_routing import match_quick_support_topic_label, message_suggests_support_faq
 from app.agents.types import AgentResult, AgentTraceStep
 from app.llm.client import chat_completion_safe, llm_available, parse_json_object
+from app.scheduling.slot_resolution import message_looks_like_slot_refinement
 
 
 def _contains_any(text: str, keywords: list[str]) -> bool:
@@ -133,27 +137,48 @@ def _looks_like_scheduling_followup_fragment(text: str) -> bool:
         return True
     if re.search(r"\b\d{3,4}\s*(am|pm)\b", t):
         return True
-    if any(
-        w in t
-        for w in (
-            "tomorrow",
-            "today",
-            "next week",
-            "monday",
-            "tuesday",
-            "wednesday",
-            "thursday",
-            "friday",
-            "yeah",
-            "yes",
-            "yup",
-            "ok",
-            "okay",
-            "sure",
-        )
-    ):
-        return True
+    if len(t) <= 28:
+        if any(
+            w in t
+            for w in (
+                "tomorrow",
+                "today",
+                "next week",
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+            )
+        ):
+            return True
+        if re.match(r"^(yes|yeah|yup|ok|okay|sure)\b", t):
+            return True
     return False
+
+
+def _fresh_booking_resets_clarify(text: str) -> bool:
+    """User sent a full booking request; drop stale rolling clarify from earlier errors."""
+    raw = (text or "").strip()
+    if len(raw) < 22:
+        return False
+    m = raw.lower()
+    if "book" not in m and "appointment" not in m:
+        return False
+    return any(
+        p in m
+        for p in (
+            "book me",
+            "book an",
+            "book a ",
+            "book appointment",
+            "book slot",
+            "appointment for",
+            "for kyc",
+            "for sip",
+            "book kyc",
+        )
+    )
 
 
 def _is_brief_greeting(text: str) -> bool:
@@ -259,12 +284,35 @@ def handle_chat_turn(session: Session, session_id: str, user_name: str, message:
         )
 
     pending_confirm = get_pending_schedule_confirm(session, session_id)
+    pc_snapshot = pending_confirm
+    if (
+        pc_snapshot
+        and str(pc_snapshot.get("kind") or "") == "book"
+        and not is_scheduling_confirmation_message(sanitized_message)
+        and not is_scheduling_rejection_message(sanitized_message)
+        and message_looks_like_slot_refinement(sanitized_message)
+    ):
+        clear_pending_schedule_confirm(session, session_id)
+        sanitized_message = f"{booking_context_prefix_for_topic(str(pc_snapshot.get('topic') or ''))}{sanitized_message}".strip()
+        traces.append(
+            AgentTraceStep(
+                agent="orchestrator",
+                reasoning_brief="User sent a new date/time while a booking preview was pending — cleared confirm state and re-parsed slot.",
+                tools=["scheduling.slot_refinement"],
+                outcome="booking_slot_refinement",
+            )
+        )
+        pending_confirm = None
+
     force_scheduling_confirm_reply = bool(pending_confirm) and (
         is_scheduling_confirmation_message(sanitized_message)
         or is_scheduling_rejection_message(sanitized_message)
     )
 
     clarify_snapshot = get_pending_scheduling_clarify(session, session_id)
+    if clarify_snapshot and _fresh_booking_resets_clarify(sanitized_message):
+        clear_pending_scheduling_clarify(session, session_id)
+        clarify_snapshot = None
     if (
         clarify_snapshot
         and not pending_confirm

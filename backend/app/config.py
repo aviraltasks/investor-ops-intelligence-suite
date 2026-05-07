@@ -46,3 +46,13 @@ def get_google_doc_id() -> str | None:
     """Target Google Doc for pulse append (service account must have edit access)."""
     raw = os.getenv("GOOGLE_DOC_ID")
     return raw.strip() if raw else None
+
+
+def get_booking_max_days_ahead() -> int:
+    """Max calendar days from today for advisor self-serve booking."""
+    raw = os.getenv("BOOKING_MAX_DAYS_AHEAD", "120")
+    try:
+        v = int(raw)
+    except ValueError:
+        return 120
+    return max(14, min(v, 365))

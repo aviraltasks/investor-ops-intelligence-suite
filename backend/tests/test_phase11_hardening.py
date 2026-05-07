@@ -99,6 +99,26 @@ def test_booking_followup_time_merges_into_scheduling(monkeypatch, tmp_path) -> 
         assert "confirm booking" in low or "weekday" in low or "date" in low or "ist" in low
 
 
+def test_change_slot_while_booking_preview(monkeypatch, tmp_path) -> None:
+    """Sending a new time while awaiting yes/no should re-parse, not fall through to general."""
+    db_file = tmp_path / "phase11_preview_chg.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("EMBEDDING_MODEL", "hash")
+    reset_settings()
+    reset_engine()
+
+    with TestClient(app) as client:
+        sid = "pv-slot-1"
+        first = _chat(client, "Book kyc tomorrow at 2 pm", session_id=sid)
+        assert first["payload"].get("status") == "awaiting_confirmation"
+        second = _chat(client, "tomorrow at 4 pm", session_id=sid)
+        assert second["payload"].get("status") == "awaiting_confirmation"
+        low = second["response"].lower()
+        assert "welcome back" not in low
+        assert "last time we discussed" not in low
+        assert "confirm" in low
+
+
 def test_empty_and_emoji_input_handling(monkeypatch, tmp_path) -> None:
     db_file = tmp_path / "phase11_input.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")

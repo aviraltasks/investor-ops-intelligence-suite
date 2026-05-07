@@ -21,8 +21,10 @@ from app.agents.memory_agent import (
 )
 from app.agents.types import AgentResult, AgentTraceStep
 from app.db.models import Booking
+from app.config import get_booking_max_days_ahead
 from app.integrations.service import sync_booking_cancelled, sync_booking_created
 from app.llm.client import chat_completion_safe, llm_available
+from app.scheduling.slot_resolution import resolve_booking_slot
 
 TOPICS = [
     "KYC & Onboarding",
@@ -131,154 +133,31 @@ def _extract_topic(text: str) -> str:
     return "General support"
 
 
+def booking_context_prefix_for_topic(topic: str) -> str:
+    """Seed natural-language book utterances when user refines slot after a preview."""
+    t = (topic or "").strip()
+    by_topic = {
+        TOPICS[0]: "book kyc ",
+        TOPICS[1]: "book sip ",
+        TOPICS[2]: "book statements ",
+        TOPICS[3]: "book withdrawal ",
+        TOPICS[4]: "book nominee ",
+    }
+    return by_topic.get(t, "book slot ")
+
+
+def _time_plain_for_display(time_ist: str) -> str:
+    s = (time_ist or "").strip()
+    return s[:-4].strip() if s.endswith(" IST") else s
+
+
 def _extract_time_ist(text: str) -> tuple[str, str] | None:
-    """Return (date_str, time_ist) or None when invalid/ambiguous."""
-    # Strip booking codes so digits inside (e.g. GRW-A7K2) are not parsed as clock times.
-    time_src = re.sub(r"\bGRW-W-[A-Z0-9]{4}\b", " ", text, flags=re.IGNORECASE)
-    time_src = re.sub(r"\bGRW-[A-Z0-9]{4}\b", " ", time_src, flags=re.IGNORECASE)
-    now = datetime.now()
-    day = now.date()
-    t = time_src.lower()
-    # Accept compact dotted time markers like "5:00 p.m." / "500 p.m."
-    t = re.sub(r"\ba\.\s*m\.?\b", "am", t)
-    t = re.sub(r"\bp\.\s*m\.?\b", "pm", t)
-    if any(x in t for x in ["sometime", "whenever", "soon"]):
-        return None
-    if "yesterday" in t or "last monday" in t or "last week" in t:
-        return None
-    if "saturday" in t or "sunday" in t or "weekend" in t:
-        return None
-    if "tomorrow" in t:
-        day = day + timedelta(days=1)
-        # UX-friendly interpretation: if "tomorrow" lands on weekend, move to next business day.
-        while day.weekday() >= 5:
-            day = day + timedelta(days=1)
-    if "next week" in t:
-        day = day + timedelta(days=7)
-        while day.weekday() >= 5:
-            day = day + timedelta(days=1)
-    m = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", t)
-    if not m:
-        compact = re.search(r"\b(\d{3,4})\s*(am|pm)\b", t)
-        if compact:
-            raw = compact.group(1)
-            ampm = compact.group(2)
-            if len(raw) == 3:
-                hh = int(raw[0])
-                mm = int(raw[1:])
-            else:
-                hh = int(raw[:2])
-                mm = int(raw[2:])
-            if ampm == "pm" and hh < 12:
-                hh += 12
-            if ampm == "am" and hh == 12:
-                hh = 0
-            m = None
-        else:
-            m = re.search(r"\b(\d{1,2})(?::(\d{2}))?\b", t)
-            if not m:
-                return None
-            hh = int(m.group(1))
-            mm = int(m.group(2) or 0)
-    if m:
-        hh = int(m.group(1))
-        mm = int(m.group(2) or 0)
-        ampm = m.group(3)
-        if ampm == "pm" and hh < 12:
-            hh += 12
-        if ampm == "am" and hh == 12:
-            hh = 0
-    if hh < 9 or hh > 18:
-        return None
-    if hh == 18 and mm > 0:
-        return None
-    dt = datetime(day.year, day.month, day.day, hh, mm)
-    if dt.weekday() >= 5:
-        return None
-    if dt < now:
-        return None
-    return dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M IST")
+    slot, reason = resolve_booking_slot(text, max_days_ahead=get_booking_max_days_ahead())
+    return slot if reason == "ok" else None
 
 
 def _extract_time_ist_with_reason(text: str) -> tuple[tuple[str, str] | None, str]:
-    """Return ((date, time) | None, reason_code) for better user guidance."""
-    time_src = re.sub(r"\bGRW-W-[A-Z0-9]{4}\b", " ", text, flags=re.IGNORECASE)
-    time_src = re.sub(r"\bGRW-[A-Z0-9]{4}\b", " ", time_src, flags=re.IGNORECASE)
-    now = datetime.now()
-    day = now.date()
-    t = time_src.lower()
-    t = re.sub(r"\ba\.\s*m\.?\b", "am", t)
-    t = re.sub(r"\bp\.\s*m\.?\b", "pm", t)
-    has_date_hint = any(
-        x in t
-        for x in (
-            "today",
-            "tomorrow",
-            "next week",
-            "monday",
-            "tuesday",
-            "wednesday",
-            "thursday",
-            "friday",
-            "saturday",
-            "sunday",
-        )
-    )
-    if any(x in t for x in ["sometime", "whenever", "soon"]):
-        return None, "ambiguous_time"
-    if "yesterday" in t or "last monday" in t or "last week" in t:
-        return None, "past_time"
-    if "saturday" in t or "sunday" in t or "weekend" in t:
-        return None, "weekend"
-    if "tomorrow" in t:
-        day = day + timedelta(days=1)
-        while day.weekday() >= 5:
-            day = day + timedelta(days=1)
-    if "next week" in t:
-        day = day + timedelta(days=7)
-        while day.weekday() >= 5:
-            day = day + timedelta(days=1)
-    m = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", t)
-    if not m:
-        compact = re.search(r"\b(\d{3,4})\s*(am|pm)\b", t)
-        if compact:
-            raw = compact.group(1)
-            ampm = compact.group(2)
-            if len(raw) == 3:
-                hh = int(raw[0])
-                mm = int(raw[1:])
-            else:
-                hh = int(raw[:2])
-                mm = int(raw[2:])
-            if ampm == "pm" and hh < 12:
-                hh += 12
-            if ampm == "am" and hh == 12:
-                hh = 0
-            m = None
-        else:
-            m = re.search(r"\b(\d{1,2})(?::(\d{2}))?\b", t)
-            if not m:
-                return None, "missing_time"
-            hh = int(m.group(1))
-            mm = int(m.group(2) or 0)
-    if m:
-        hh = int(m.group(1))
-        mm = int(m.group(2) or 0)
-        ampm = m.group(3)
-        if ampm == "pm" and hh < 12:
-            hh += 12
-        if ampm == "am" and hh == 12:
-            hh = 0
-    if hh < 9 or hh > 18 or (hh == 18 and mm > 0):
-        return None, "outside_hours"
-    dt = datetime(day.year, day.month, day.day, hh, mm)
-    if dt.weekday() >= 5:
-        return None, "weekend"
-    if dt < now:
-        if not has_date_hint:
-            return None, "missing_date"
-        return None, "past_time"
-    return (dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M IST")), "ok"
+    return resolve_booking_slot(text, max_days_ahead=get_booking_max_days_ahead())
 
 
 def _wants_reschedule(msg: str) -> bool:
@@ -615,7 +494,7 @@ def _execute_confirmed_book(
         "integration_sync": sync,
     }
     draft = (
-        f"You're all set. Booking Code: {code}. Date: {date_str}, Time: {time_ist} IST, "
+        f"You're all set. Booking Code: {code}. Date: {date_str}, Time: {_time_plain_for_display(time_ist)} IST, "
         f"Topic: {topic}, Advisor: Advisor {advisor_idx}. "
         "Please visit the secure page and enter your booking code to share contact details when ready."
     )
@@ -771,7 +650,7 @@ def _execute_confirmed_reschedule(
         "integration_sync": meta,
     }
     draft = (
-        f"Done — booking {booking.booking_code} is moved from {old_date} {old_time} IST to {date_str} at {time_ist} IST. "
+        f"Done — booking {booking.booking_code} is moved from {old_date} {_time_plain_for_display(old_time)} IST to {date_str} at {_time_plain_for_display(time_ist)} IST. "
         f"Topic: {booking.topic}, {booking.advisor}. Anything else?"
     )
     polished = _llm_polish_scheduling_reply(
@@ -912,7 +791,7 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
                 followup = "That looks like a past slot. Please share a future weekday date and time in IST."
             return AgentResult(
                 response_text=(
-                f"Found booking {booking.booking_code} ({booking.topic}, {booking.date} {booking.time_ist} IST). "
+                f"Found booking {booking.booking_code} ({booking.topic}, {booking.date} {_time_plain_for_display(booking.time_ist)} IST). "
                 f"{followup}"
                 ),
                 payload={
@@ -1004,7 +883,7 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
         }
         draft = (
             f"Please confirm reschedule: {booking.booking_code} from {old_date} {old_time} IST "
-            f"to {date_str} {time_ist} IST ({booking.topic}). Reply yes or no."
+            f"to {date_str} {_time_plain_for_display(time_ist)} IST ({booking.topic}). Reply yes or no."
         )
         polished = _llm_polish_scheduling_reply(
             user_message=message, draft=draft, payload=out_payload, action="reschedule"
@@ -1076,7 +955,7 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
             "time_ist": booking.time_ist,
         }
         draft = (
-            f"Please confirm cancellation for {booking.booking_code} ({booking.topic}, {booking.date} {booking.time_ist} IST). "
+            f"Please confirm cancellation for {booking.booking_code} ({booking.topic}, {booking.date} {_time_plain_for_display(booking.time_ist)} IST). "
             "Reply yes or no."
         )
         polished = _llm_polish_scheduling_reply(
@@ -1210,6 +1089,11 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
             guidance = "That looks like a past slot. Please share a future weekday date and time in IST."
         elif slot_reason == "ambiguous_time":
             guidance = "Please share a specific weekday date and time in IST (example: tomorrow at 10 am)."
+        elif slot_reason == "too_far_future":
+            guidance = (
+                f"That date is outside our booking window. Please pick a weekday within the next "
+                f"{get_booking_max_days_ahead()} days."
+            )
         save_pending_scheduling_clarify(
             session,
             session_id,
@@ -1290,7 +1174,7 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
         "status": "awaiting_confirmation",
     }
     draft = (
-        f"Please confirm booking: {topic} on {date_str} at {time_ist} IST with Advisor {advisor_idx}. "
+        f"Please confirm booking: {topic} on {date_str} at {_time_plain_for_display(time_ist)} IST with Advisor {advisor_idx}. "
         "Reply yes or no."
     )
     polished = _llm_polish_scheduling_reply(
