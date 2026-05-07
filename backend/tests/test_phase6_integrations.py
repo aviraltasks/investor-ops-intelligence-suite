@@ -63,7 +63,7 @@ def test_live_mode_without_ids_returns_explicit_errors(monkeypatch, tmp_path) ->
     reset_engine()
 
     with TestClient(app) as client:
-        _chat(client, "phase6-s3", "book appointment next week for SIP")
+        _chat(client, "phase6-s3", "book appointment next week at 10 am for SIP")
         out = _chat(client, "phase6-s3", "yes")
         sync = out["payload"].get("integration_sync", {})
         assert sync.get("calendar", {}).get("ok") is False

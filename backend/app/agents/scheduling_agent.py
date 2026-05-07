@@ -152,17 +152,16 @@ def _extract_time_ist(text: str) -> tuple[str, str] | None:
         day = day + timedelta(days=7)
         while day.weekday() >= 5:
             day = day + timedelta(days=1)
-    hh = 10
-    mm = 0
     m = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", t)
-    if m:
-        hh = int(m.group(1))
-        mm = int(m.group(2) or 0)
-        ampm = m.group(3)
-        if ampm == "pm" and hh < 12:
-            hh += 12
-        if ampm == "am" and hh == 12:
-            hh = 0
+    if not m:
+        return None
+    hh = int(m.group(1))
+    mm = int(m.group(2) or 0)
+    ampm = m.group(3)
+    if ampm == "pm" and hh < 12:
+        hh += 12
+    if ampm == "am" and hh == 12:
+        hh = 0
     if hh < 9 or hh > 18:
         return None
     if hh == 18 and mm > 0:
@@ -1082,8 +1081,8 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
             )
         return AgentResult(
             response_text=(
-                "Please share a valid weekday slot in IST between 9:00 and 18:00 "
-                "(for example: tomorrow at 10 am IST)."
+                "What weekday time works for you in IST (Mon–Fri, 9:00 AM–6:00 PM)? "
+                "For example: tomorrow at 10 am IST."
                 + waitlist_hint
             ),
             traces=[

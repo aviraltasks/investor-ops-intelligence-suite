@@ -45,11 +45,15 @@ def test_scheduling_time_and_cancellation_edges(monkeypatch, tmp_path) -> None:
     reset_engine()
 
     with TestClient(app) as client:
+        missing_time = _chat(client, "Book me tomorrow for KYC", session_id="sch-1")
+        assert "What weekday time works for you in IST" in missing_time["response"]
+        assert missing_time["payload"].get("status") == "needs_time_clarification"
+
         bad_time = _chat(client, "Book me at 3am tomorrow for KYC", session_id="sch-1")
-        assert "valid weekday slot in IST between 9:00 and 18:00" in bad_time["response"]
+        assert "What weekday time works for you in IST" in bad_time["response"]
 
         weekend = _chat(client, "Book me for Saturday at 10 am", session_id="sch-1")
-        assert "valid weekday slot in IST between 9:00 and 18:00" in weekend["response"]
+        assert "What weekday time works for you in IST" in weekend["response"]
 
         _chat(client, "Book appointment tomorrow at 10 am for KYC", session_id="sch-1")
         booked = _chat(client, "yes", session_id="sch-1")
