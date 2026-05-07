@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.agents.topic_routing import looks_like_topic_help_query
 from app.agents.types import AgentResult, AgentTraceStep
 from app.llm.client import chat_completion_safe, llm_available, parse_json_object
 from app.db.models import RagChunk
@@ -413,7 +414,7 @@ def _deterministic_domain_clarifier(query: str) -> tuple[str, list[str]] | None:
     q = (query or "").strip().lower()
     if not q:
         return None
-    if "help with" not in q:
+    if not looks_like_topic_help_query(query):
         return None
     if "kyc" in q or "onboarding" in q:
         return (
@@ -422,10 +423,24 @@ def _deterministic_domain_clarifier(query: str) -> tuple[str, list[str]] | None:
             ),
             ["https://investor.sebi.gov.in/"],
         )
-    if "sip" in q or "mandate" in q:
+    if re.search(r"\bsip\b", q) or "mandate" in q:
         return (
             _two_sentences(
                 "Sure — for SIP & mandates, are you asking setup basics, mandate failure troubleshooting, or advisor booking?"
+            ),
+            ["https://investor.sebi.gov.in/"],
+        )
+    if ("statement" in q and "tax" in q) or "tax document" in q or "form 16" in q:
+        return (
+            _two_sentences(
+                "Sure — for statements & tax docs, want download steps, Form 16 timing, or transaction history issues?"
+            ),
+            ["https://investor.sebi.gov.in/"],
+        )
+    if "withdraw" in q or "withdrawal" in q:
+        return (
+            _two_sentences(
+                "Sure — for withdrawals, are you asking about settlement timelines, limits, or a failed bank transfer?"
             ),
             ["https://investor.sebi.gov.in/"],
         )

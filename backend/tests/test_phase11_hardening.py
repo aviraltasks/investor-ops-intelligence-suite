@@ -98,3 +98,16 @@ def test_empty_and_emoji_input_handling(monkeypatch, tmp_path) -> None:
         quick_topic = _chat(client, "I want help with SIP & Mandates", session_id="input-1")
         qtext = quick_topic["response"].lower()
         assert "quick checklist" in qtext or "advisor call" in qtext
+
+        give_kyc = _chat(client, "Give me KYC and onboarding.", session_id="input-2")
+        gk = give_kyc["response"].lower()
+        assert "trending" not in gk
+        assert "quick checklist" in gk or "advisor call" in gk or "kyc" in gk
+
+        stmt = _chat(client, "Tell me about statement and tax document.", session_id="input-3")
+        st = stmt["response"].lower()
+        assert "trending" not in st
+        assert "statement" in st or "tax" in st or "form 16" in st or "download" in st
+
+        dog = _chat(client, "are you a dog", session_id="input-4")
+        assert "trending" not in dog["response"].lower()

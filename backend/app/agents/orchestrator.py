@@ -18,6 +18,7 @@ from app.agents.scheduling_agent import (
     is_scheduling_rejection_message,
     wants_what_to_prepare_message,
 )
+from app.agents.topic_routing import match_quick_support_topic_label, message_suggests_support_faq
 from app.agents.types import AgentResult, AgentTraceStep
 from app.llm.client import chat_completion_safe, llm_available, parse_json_object
 
@@ -31,9 +32,7 @@ def _classify_intents(message: str) -> list[str]:
     intents: list[str] = []
     m = message.lower()
     wants_prepare = wants_what_to_prepare_message(m)
-    if _contains_any(m, ["what did we discuss", "what did we talk", "remember", "last time", "recap", "summary"]):
-        intents.append("memory_recall")
-    if wants_prepare or _contains_any(
+    scheduling_focus = wants_prepare or _contains_any(
         m,
         [
             "book",
@@ -45,11 +44,16 @@ def _classify_intents(message: str) -> list[str]:
             "waitlist",
             "wait list",
         ],
-    ):
+    )
+    if _contains_any(m, ["what did we discuss", "what did we talk", "remember", "last time", "recap", "summary"]):
+        intents.append("memory_recall")
+    if scheduling_focus:
         intents.append("scheduling")
     if not wants_prepare and _contains_any(m, ["expense ratio", "exit load", "nav", "fund", "elss", "small cap", "large cap"]):
         intents.append("faq")
-    if _contains_any(m, ["pulse", "theme", "review trend", "customers are saying"]):
+    if message_suggests_support_faq(message, scheduling_focus=scheduling_focus):
+        intents.append("faq")
+    if _contains_any(m, ["pulse", "theme", "review trend", "trending", "customers are saying"]):
         intents.append("review_context")
     if not intents:
         intents.append("general")
@@ -113,21 +117,24 @@ def _is_name_query(text: str) -> bool:
     )
 
 
-def _quick_topic_help_intent(text: str) -> str | None:
-    t = (text or "").lower()
-    if "help with" not in t:
-        return None
-    if "kyc" in t or "onboarding" in t:
-        return "KYC & Onboarding"
-    if "sip" in t or "mandate" in t:
-        return "SIP & Mandates"
-    if "statement" in t or "tax" in t:
-        return "Statements & Tax Documents"
-    if "withdraw" in t or "timeline" in t:
-        return "Withdrawals & Timelines"
-    if "account change" in t or "account changes" in t or "nominee" in t:
-        return "Account Changes & Nominee Updates"
-    return None
+def _is_brief_greeting(text: str) -> bool:
+    t = re.sub(r"\s+", " ", (text or "").lower()).strip()
+    return t in {
+        "hi",
+        "hi there",
+        "hello",
+        "hello there",
+        "hey",
+        "hey there",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "thanks",
+        "thank you",
+        "thankyou",
+        "ok",
+        "okay",
+    }
 
 
 def _compact_reply(text: str, *, max_len: int = 200) -> str:
@@ -146,6 +153,22 @@ def _compact_reply(text: str, *, max_len: int = 200) -> str:
             lines = [ln for ln in parts[1].splitlines() if ln.strip()]
             if lines:
                 concise += "\n\nSources:\n" + lines[0]
+        return concise
+    if re.search(r"Learn more:\s*https?://", parts[0], flags=re.IGNORECASE):
+        raw = parts[0].strip()
+        lines = [ln.rstrip() for ln in raw.splitlines()]
+        tail = next((ln for ln in reversed(lines) if ln.lower().startswith("learn more:")), "")
+        head_lines = [ln for ln in lines if not ln.lower().startswith("learn more:")]
+        head = "\n".join(head_lines).strip()
+        head_one = re.sub(r"\s+", " ", head).strip()
+        if len(head_one) <= max_len + 160:
+            concise = f"{head}\n\n{tail}".strip() if tail else head
+        else:
+            concise = f"{head_one[:max_len].rstrip()}…\n\n{tail}".strip() if tail else head_one[:max_len]
+        if len(parts) == 2 and parts[1].strip():
+            src_lines = [ln for ln in parts[1].splitlines() if ln.strip()]
+            if src_lines:
+                concise += "\n\nSources:\n" + src_lines[0]
         return concise
     main = re.sub(r"\s+", " ", parts[0]).strip()
     sentences = re.split(r"(?<=[.!?])\s+", main)
@@ -268,7 +291,7 @@ def handle_chat_turn(session: Session, session_id: str, user_name: str, message:
             payload={"intents": ["general"]},
         )
 
-    quick_topic = _quick_topic_help_intent(sanitized_message)
+    quick_topic = match_quick_support_topic_label(sanitized_message)
     if quick_topic:
         return AgentResult(
             response_text=(
@@ -314,7 +337,8 @@ def handle_chat_turn(session: Session, session_id: str, user_name: str, message:
                         "You are Finn's orchestrator (Groww-style fintech assistant). "
                         'Output ONLY valid JSON: {"intents":["..."],"reasoning":"one or two sentences"}. '
                         "Allowed intent strings (1-3): faq, scheduling, memory_recall, review_context, general. "
-                        "faq=fund/MF concepts; scheduling=book/cancel/reschedule/availability/waitlist/what_to_prepare; "
+                        "faq=fund/MF concepts plus account ops (KYC, onboarding, SIP/mandates, statements/tax docs, withdrawals); "
+                        "scheduling=book/cancel/reschedule/availability/waitlist/what_to_prepare; "
                         "memory_recall=recap/what we discussed; review_context=pulse/themes/reviews; "
                         "general=greeting or small talk. Never output investment advice."
                     ),
@@ -350,6 +374,22 @@ def handle_chat_turn(session: Session, session_id: str, user_name: str, message:
                 tools=[tool, "memory_context", "pulse_context"],
                 outcome=f"intents={intents}",
             )
+            wants_prepare = wants_what_to_prepare_message(sanitized_message.lower())
+            sch_focus = wants_prepare or _contains_any(
+                sanitized_message.lower(),
+                [
+                    "book",
+                    "appointment",
+                    "reschedule",
+                    "cancel",
+                    "availability",
+                    "available",
+                    "waitlist",
+                    "wait list",
+                ],
+            )
+            if "faq" not in intents and message_suggests_support_faq(sanitized_message, scheduling_focus=sch_focus):
+                intents.insert(0, "faq")
     else:
         intents = _classify_intents(sanitized_message)
         intent_trace = AgentTraceStep(
@@ -358,6 +398,9 @@ def handle_chat_turn(session: Session, session_id: str, user_name: str, message:
             tools=["intent_classifier(keyword)", "memory_context", "pulse_context"],
             outcome=f"intents={intents}",
         )
+
+    if "faq" in intents and "general" in intents:
+        intents = [i for i in intents if i != "general"]
 
     payload["intents"] = intents
     if intent_trace:
@@ -399,7 +442,23 @@ def handle_chat_turn(session: Session, session_id: str, user_name: str, message:
             memory_prefix = ""
             if mem_ctx.get("is_returning_user") and mem_ctx.get("recent_topics"):
                 memory_prefix = f"Welcome back {user_name or 'there'}! Last time we discussed {mem_ctx['recent_topics'][0]}. "
-            if top:
+            mlow = sanitized_message.lower()
+            show_pulse_teaser = bool(top) and (
+                _is_brief_greeting(sanitized_message)
+                or _contains_any(
+                    mlow,
+                    [
+                        "trend",
+                        "trending",
+                        "pulse",
+                        "review theme",
+                        "what are people",
+                        "customers saying",
+                        "customers are saying",
+                    ],
+                )
+            )
+            if show_pulse_teaser and top:
                 responses.append(
                     f"{memory_prefix}Hi {user_name or 'there'}! I notice '{top}' is trending this week. I can help with fund FAQs or booking."
                 )
