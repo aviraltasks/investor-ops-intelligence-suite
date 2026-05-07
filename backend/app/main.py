@@ -355,14 +355,30 @@ def chat(req: ChatRequest) -> ChatResponse:
     req.message = (req.message or "").strip()[:2000]
     req.user_name = (req.user_name or "User").strip()[:128]
     req.session_id = (req.session_id or "default-session").strip()[:128]
-    with _db() as session:
-        result = handle_chat_turn(session, req.session_id, req.user_name, req.message)
-        _log_chat_artifacts(session, req, result)
-    return ChatResponse(
-        response=result.response_text,
-        traces=[t.model_dump() for t in result.traces],
-        payload=result.payload,
-    )
+    try:
+        with _db() as session:
+            result = handle_chat_turn(session, req.session_id, req.user_name, req.message)
+            _log_chat_artifacts(session, req, result)
+        return ChatResponse(
+            response=result.response_text,
+            traces=[t.model_dump() for t in result.traces],
+            payload=result.payload,
+        )
+    except Exception:
+        # Keep the chat API resilient: never leak raw 500s to the client for recoverable runtime issues.
+        return ChatResponse(
+            response="I hit a temporary issue processing that request. Please try once more.",
+            traces=[
+                {
+                    "agent": "orchestrator",
+                    "reasoning_brief": "Caught unexpected runtime error and returned safe fallback response.",
+                    "tools": ["chat.fallback_guard"],
+                    "replanned": False,
+                    "outcome": "runtime_fallback",
+                }
+            ],
+            payload={"status": "runtime_fallback"},
+        )
 
 
 @app.get("/api/admin/analytics")

@@ -49,6 +49,10 @@ def test_scheduling_time_and_cancellation_edges(monkeypatch, tmp_path) -> None:
         assert "What weekday time works for you in IST" in missing_time["response"]
         assert missing_time["payload"].get("status") == "needs_time_clarification"
 
+        dotted = _chat(client, "Book me tomorrow at 500 p.m. for KYC", session_id="sch-1")
+        assert dotted["payload"].get("status") == "awaiting_confirmation"
+        assert "Please confirm booking" in dotted["response"]
+
         bad_time = _chat(client, "Book me at 3am tomorrow for KYC", session_id="sch-1")
         assert "What weekday time works for you in IST" in bad_time["response"]
 

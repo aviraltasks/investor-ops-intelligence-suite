@@ -362,6 +362,13 @@ export function ChatClient({ initialName }: { initialName: string }) {
     const shouldAutoWelcome =
       typeof window !== "undefined" &&
       window.sessionStorage.getItem("finn_autoplay_welcome") === "1";
+    const shouldVoiceBootstrap =
+      typeof window !== "undefined" &&
+      window.sessionStorage.getItem("finn_voice_bootstrap") === "1";
+    if (shouldVoiceBootstrap) {
+      window.sessionStorage.removeItem("finn_voice_bootstrap");
+      hasUserInteractedRef.current = true;
+    }
     if (shouldAutoWelcome && hasSynthesis) {
       window.sessionStorage.removeItem("finn_autoplay_welcome");
       autoWelcomeAttemptedRef.current = true;
@@ -369,6 +376,11 @@ export function ChatClient({ initialName }: { initialName: string }) {
       window.setTimeout(() => {
         speak(welcomeText, { autoListen: true });
       }, 250);
+      window.setTimeout(() => {
+        if (micStateRef.current === "idle" && !recognitionActiveRef.current) {
+          requestStartListening(0);
+        }
+      }, 1800);
     }
     const onVisibilityChange = () => {
       if (document.hidden) return;

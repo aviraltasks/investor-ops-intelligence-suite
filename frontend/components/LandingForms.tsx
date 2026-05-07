@@ -14,6 +14,19 @@ export function LandingForms() {
     if (!name) return;
     if (typeof window !== "undefined") {
       window.sessionStorage.setItem("finn_autoplay_welcome", "1");
+      window.sessionStorage.setItem("finn_voice_bootstrap", "1");
+      if ("speechSynthesis" in window) {
+        try {
+          // Warm up TTS inside the same user gesture to improve next-page autoplay success.
+          window.speechSynthesis.resume();
+          const primer = new SpeechSynthesisUtterance(" ");
+          primer.volume = 0;
+          window.speechSynthesis.speak(primer);
+          window.speechSynthesis.cancel();
+        } catch {
+          // noop
+        }
+      }
     }
     router.push(`/chat?name=${encodeURIComponent(name)}`);
   }

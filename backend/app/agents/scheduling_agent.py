@@ -133,6 +133,9 @@ def _extract_time_ist(text: str) -> tuple[str, str] | None:
     now = datetime.now()
     day = now.date()
     t = time_src.lower()
+    # Accept compact dotted time markers like "5:00 p.m." / "500 p.m."
+    t = re.sub(r"\ba\.\s*m\.?\b", "am", t)
+    t = re.sub(r"\bp\.\s*m\.?\b", "pm", t)
     if any(x in t for x in ["sometime", "whenever", "soon"]):
         return None
     if "yesterday" in t or "last monday" in t or "last week" in t:
