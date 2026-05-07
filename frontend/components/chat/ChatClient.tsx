@@ -477,7 +477,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
         speak(welcomeText, { autoListen: true });
         return;
       }
-      if (firstInteraction && voiceModeStateRef.current !== "off") requestStartListening();
+      if (firstInteraction) requestStartListening();
     };
     if (typeof window !== "undefined") {
       const seen = window.sessionStorage.getItem("finn_voice_mode_seen") === "1";
