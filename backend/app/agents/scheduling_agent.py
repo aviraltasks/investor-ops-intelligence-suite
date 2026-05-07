@@ -62,15 +62,11 @@ Learn more: {SEBI_INVESTOR_EDU}""",
 Learn more: {SEBI_INVESTOR_EDU}""",
 }
 
-_PREPARE_TOPIC_PROMPT = """Happy to help you prepare! Which topic is your appointment about?
-
-1. KYC & Onboarding
-2. SIP & Mandates
-3. Statements & Tax Documents
-4. Withdrawals & Timelines
-5. Account Changes & Nominee Updates
-
-Reply with the topic name or number (for example: "KYC" or "2")."""
+_PREPARE_TOPIC_PROMPT = (
+    "Happy to help. Which topic should I prepare you for: "
+    "1) KYC, 2) SIP, 3) Statements/Tax, 4) Withdrawals, 5) Account/Nominee? "
+    "Reply with name or number."
+)
 
 
 def wants_what_to_prepare_message(msg: str) -> bool:
@@ -791,9 +787,8 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
             )
             return AgentResult(
                 response_text=(
-                    f"Found it — your current booking {booking.booking_code}: {booking.topic} on {booking.date} at "
-                    f"{booking.time_ist} IST with {booking.advisor}. When would you like to move this to? "
-                    "Share a weekday time between 9:00 AM and 6:00 PM IST (e.g. tomorrow at 3 pm IST)."
+                f"Found booking {booking.booking_code} ({booking.topic}, {booking.date} {booking.time_ist} IST). "
+                "What new weekday time should I move it to (Mon–Fri, 9:00 AM–6:00 PM IST)?"
                 ),
                 payload={
                     "booking_code": booking.booking_code,
@@ -883,12 +878,8 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
             "previous_time_ist": old_time,
         }
         draft = (
-            f"Just to confirm the change:\n\n"
-            f"Old slot: {old_date} at {old_time} IST\n"
-            f"New slot: {date_str} at {time_ist} IST\n"
-            f"Topic: {booking.topic}\n"
-            f"Booking code: {booking.booking_code} (same code after the move)\n\n"
-            f"Shall I make this change? Reply **yes** to confirm or **no** to leave everything as it is."
+            f"Please confirm reschedule: {booking.booking_code} from {old_date} {old_time} IST "
+            f"to {date_str} {time_ist} IST ({booking.topic}). Reply yes or no."
         )
         polished = _llm_polish_scheduling_reply(
             user_message=message, draft=draft, payload=out_payload, action="reschedule"
@@ -960,10 +951,8 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
             "time_ist": booking.time_ist,
         }
         draft = (
-            f"I found your booking:\nTopic: {booking.topic}\n"
-            f"Date: {booking.date} at {booking.time_ist} IST\n"
-            f"Code: {booking.booking_code}\n\n"
-            f"Are you sure you would like to cancel this? Reply **yes** to confirm or **no** to keep it."
+            f"Please confirm cancellation for {booking.booking_code} ({booking.topic}, {booking.date} {booking.time_ist} IST). "
+            "Reply yes or no."
         )
         polished = _llm_polish_scheduling_reply(
             user_message=message, draft=draft, payload=pl_payload, action="cancel"
@@ -1156,12 +1145,8 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
         "status": "awaiting_confirmation",
     }
     draft = (
-        f"Just to confirm — you are booking:\n\n"
-        f"Topic: {topic}\n"
-        f"Date: {date_str}\n"
-        f"Time: {time_ist}\n"
-        f"Advisor: Advisor {advisor_idx}\n\n"
-        f"Shall I lock this in? Reply **yes** to confirm or **no** to cancel this request."
+        f"Please confirm booking: {topic} on {date_str} at {time_ist} IST with Advisor {advisor_idx}. "
+        "Reply yes or no."
     )
     polished = _llm_polish_scheduling_reply(
         user_message=message, draft=draft, payload=out_payload, action="book"
