@@ -26,6 +26,9 @@ def _seed_chunks() -> None:
         "Mirae Asset ELSS Tax Saver Fund Direct Growth has an exit load of 1% if redeemed within 1 year from allotment.",
         "Exit load is charged to discourage short-term redemptions and stabilize fund management.",
         "Current NAV is 123.45 as per latest published update.",
+        "SBI Small Cap Fund Direct Growth expense ratio is 0.72% for direct plan.",
+        "Kotak Small Cap Fund Direct Growth expense ratio is 0.89% for direct plan.",
+        "Quant Small Cap Fund Direct Growth expense ratio is 0.64% for direct plan.",
     ]
     embs = embedder.encode(texts)
     SessionLocal = get_session_factory()
@@ -58,6 +61,33 @@ def _seed_chunks() -> None:
                     chunk_index=0,
                     content=texts[2],
                     embedding=embs[2].tolist(),
+                ),
+                RagChunk(
+                    source_url="https://groww.in/mutual-funds/sbi-small-midcap-fund-direct-growth",
+                    layer="groww",
+                    fund_slug="sbi-small-midcap-fund-direct-growth",
+                    fund_display_name="SBI Small Cap Fund",
+                    chunk_index=0,
+                    content=texts[3],
+                    embedding=embs[3].tolist(),
+                ),
+                RagChunk(
+                    source_url="https://groww.in/mutual-funds/kotak-midcap-fund-direct-growth",
+                    layer="groww",
+                    fund_slug="kotak-midcap-fund-direct-growth",
+                    fund_display_name="Kotak Small Cap Fund",
+                    chunk_index=0,
+                    content=texts[4],
+                    embedding=embs[4].tolist(),
+                ),
+                RagChunk(
+                    source_url="https://groww.in/mutual-funds/quant-small-cap-fund-direct-plan-growth",
+                    layer="groww",
+                    fund_slug="quant-small-cap-fund-direct-plan-growth",
+                    fund_display_name="Quant Small Cap Fund",
+                    chunk_index=0,
+                    content=texts[5],
+                    embedding=embs[5].tolist(),
                 ),
             ]
         )
@@ -118,3 +148,25 @@ def test_cached_faq_path_is_used(monkeypatch, tmp_path) -> None:
         out2 = _post_chat(client, q, session_id="p14-cache-2")
         rag_steps = [t for t in out2["traces"] if t["agent"] == "rag_agent"]
         assert any("cache_hit" in (t.get("outcome") or "") for t in rag_steps)
+
+
+def test_deterministic_expense_ratio_comparison(monkeypatch, tmp_path) -> None:
+    db_file = tmp_path / "phase14_compare.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("EMBEDDING_MODEL", "hash")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    reset_settings()
+    reset_engine()
+
+    with TestClient(app) as client:
+        _seed_chunks()
+        out = _post_chat(
+            client,
+            "Compare expense ratio of SBI Small Cap, Kotak Small Cap and Quant Small Cap",
+            session_id="p14-compare",
+        )
+        text = out["response"]
+        assert "expense ratio comparison" in text.lower()
+        assert "0.72%" in text and "0.89%" in text and "0.64%" in text
+        assert "Sources:" in text

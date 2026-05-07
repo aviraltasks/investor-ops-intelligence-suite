@@ -86,6 +86,17 @@ def _compact(text: str, *, max_len: int = 220) -> str:
     return t[:max_len].rstrip()
 
 
+def _two_sentences(text: str) -> str:
+    t = re.sub(r"\s+", " ", (text or "")).strip()
+    if not t:
+        return ""
+    # Preserve list-style deterministic outputs as-is.
+    if "\n-" in text:
+        return text.strip()
+    parts = re.split(r"(?<=[.!?])\s+", t)
+    return " ".join(parts[:2]).strip()
+
+
 def _sentences(text: str) -> list[str]:
     raw = re.split(r"(?<=[.!?])\s+|\n+", text or "")
     out: list[str] = []
@@ -129,18 +140,20 @@ def _extract_snippets(query: str, hits: list[dict[str, Any]], limit: int = 3) ->
 def _heuristic_answer(query: str, hits: list[dict[str, Any]]) -> str:
     snippets = _extract_snippets(query, hits, limit=3)
     if snippets:
-        if "exit load" in query.lower():
-            intro = "From the available fund documents, here is what I found about exit load:"
-        elif "nav" in query.lower():
-            intro = "From the indexed fund pages, here is what I found about NAV:"
-        elif "expense ratio" in query.lower():
-            intro = "From the indexed pages, here are the expense-ratio details I could extract:"
+        q = query.lower()
+        if "exit load" in q:
+            intro = "From indexed fund sources, the key exit-load details are:"
+        elif "nav" in q:
+            intro = "From indexed fund sources, the key NAV details are:"
+        elif "expense ratio" in q:
+            intro = "From indexed sources, the key expense-ratio details are:"
         else:
-            intro = "From the available sources, here are the most relevant facts:"
-        return intro + "\n" + "\n".join(f"- {s}" for s in snippets)
+            intro = "From available sources, the key facts are:"
+        joined = "; ".join(_compact(s, max_len=120) for s in snippets[:2])
+        return _two_sentences(f"{intro} {joined}.")
     return (
-        "I found related sources, but I could not reliably extract a precise value for this exact query from the available text. "
-        "Please try a more specific variant (fund name + exact metric), or retry in a minute."
+        "I found related sources, but I could not extract a precise value for this exact query from current indexed text. "
+        "Please ask with fund name plus exact metric (for example, 'expense ratio of <fund>')."
     )
 
 
@@ -155,17 +168,83 @@ def _collect_sources(hits: list[dict[str, Any]], limit: int = 2) -> list[str]:
     return out
 
 
+def _fund_label(hit: dict[str, Any]) -> str:
+    name = str(hit.get("fund_display_name") or "").strip()
+    if name:
+        return name
+    url = str(hit.get("source_url", "")).strip().lower()
+    m = re.search(r"/mutual-funds/([a-z0-9\-]+)", url)
+    if m:
+        slug = m.group(1).replace("-", " ")
+        return " ".join(w.capitalize() for w in slug.split())
+    return "Fund"
+
+
+def _deterministic_comparison_answer(query: str, hits: list[dict[str, Any]]) -> tuple[str, list[str]] | None:
+    q = query.lower()
+    if not any(k in q for k in ("compare", "vs", "versus", "difference", "between")):
+        return None
+
+    metric = ""
+    if "expense ratio" in q:
+        metric = "expense_ratio"
+        metric_re = re.compile(r"expense ratio[^.\n]{0,80}?(\d+(?:\.\d+)?)\s*%", re.IGNORECASE)
+        suffix = "%"
+    elif "nav" in q:
+        metric = "nav"
+        metric_re = re.compile(r"\bnav\b[^0-9₹]{0,30}(?:₹\s*)?([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
+        suffix = ""
+    else:
+        return None
+
+    found: list[tuple[str, str, str]] = []  # label, value, source
+    seen_labels: set[str] = set()
+    for h in hits:
+        text = str(h.get("content", ""))
+        m = metric_re.search(text)
+        if not m:
+            continue
+        label = _fund_label(h)
+        if label.lower() in seen_labels:
+            continue
+        seen_labels.add(label.lower())
+        val = m.group(1)
+        src = str(h.get("source_url", "")).strip()
+        found.append((label, val, src))
+        if len(found) >= 3:
+            break
+
+    if len(found) < 2:
+        return None
+
+    if metric == "expense_ratio":
+        facts = ", ".join(f"{lab}: {val}{suffix}" for lab, val, _ in found)
+        answer = _two_sentences(f"From indexed sources, expense ratio comparison is {facts}. Lower expense ratio is generally more cost-efficient, all else equal.")
+    else:
+        facts = ", ".join(f"{lab}: ₹{val}" for lab, val, _ in found)
+        answer = _two_sentences(f"From indexed sources, NAV comparison is {facts}. NAV is a per-unit value and not a standalone performance recommendation.")
+    sources = []
+    for _, _, src in found:
+        if src and src not in sources:
+            sources.append(src)
+    return answer, sources[:2]
+
+
 def _deterministic_faq_answer(session: Session, query: str) -> tuple[str, list[str]] | None:
     """
     LLM-light fast path: answer core FAQ intents with deterministic extraction.
     Returns (answer, sources) when confident, else None.
     """
     q = query.lower()
-    if not any(k in q for k in ["exit load", "nav", "expense ratio"]):
+    if not any(k in q for k in ["exit load", "nav", "expense ratio", "compare", "vs", "versus", "difference", "between"]):
         return None
     hits = _rerank_and_trim_hits(query, search_chunks(session, get_embedder(), query, top_k=8), top_k=6)
     if not hits:
         return None
+
+    cmp_ans = _deterministic_comparison_answer(query, hits)
+    if cmp_ans:
+        return cmp_ans
 
     if "exit load" in q:
         for h in hits:
@@ -174,7 +253,7 @@ def _deterministic_faq_answer(session: Session, query: str) -> tuple[str, list[s
             if m:
                 pct = m.group(1)
                 tail = _compact(m.group(2), max_len=80)
-                answer = (
+                answer = _two_sentences(
                     f"The exit load is {pct}%{(' ' + tail) if tail else ''}. "
                     "Funds charge exit load to discourage short-term redemptions and maintain portfolio stability."
                 )
@@ -187,7 +266,7 @@ def _deterministic_faq_answer(session: Session, query: str) -> tuple[str, list[s
             m = re.search(r"\bnav\b[^0-9₹]{0,30}(?:₹\s*)?([0-9]+(?:\.[0-9]+)?)", text, re.IGNORECASE)
             if m:
                 nav = m.group(1)
-                answer = f"The latest NAV found in our indexed sources is ₹{nav}."
+                answer = _two_sentences(f"The latest NAV found in our indexed sources is ₹{nav}.")
                 return answer, _collect_sources([h] + hits)
 
     if "expense ratio" in q:
@@ -196,13 +275,13 @@ def _deterministic_faq_answer(session: Session, query: str) -> tuple[str, list[s
             m = re.search(r"expense ratio[^.\n]{0,80}?(\d+(?:\.\d+)?)\s*%", text, re.IGNORECASE)
             if m:
                 pct = m.group(1)
-                answer = f"The expense ratio found in our indexed sources is {pct}%."
+                answer = _two_sentences(f"The expense ratio found in our indexed sources is {pct}%.")
                 return answer, _collect_sources([h] + hits)
 
     # Concept fallback: short extracted bullets when exact value not parsable.
     snippets = _extract_snippets(query, hits, limit=2)
     if snippets:
-        answer = " ".join(_compact(s, max_len=120) for s in snippets)
+        answer = _two_sentences(" ".join(_compact(s, max_len=120) for s in snippets))
         return answer, _collect_sources(hits)
     return None
 
@@ -337,7 +416,8 @@ def answer_faq(session: Session, query: str) -> AgentResult:
                         "You are Finn (Groww-style assistant). Use ONLY provided excerpts. "
                         "Return STRICT JSON only with this schema: "
                         '{"answer":"string","used_source_indices":[1,2]}. '
-                        "answer rules: conversational, concise, no raw chunk dumping, no ellipses from excerpts, "
+                        "answer rules: conversational, concise, default to max 2 sentences for simple questions, "
+                        "no raw chunk dumping, no ellipses from excerpts, "
                         "include concrete values when present (NAV, %, period), and if data is insufficient say that clearly. "
                         "used_source_indices rules: include only 1-2 excerpt indices actually used for the final answer."
                     ),
@@ -388,7 +468,7 @@ def answer_faq(session: Session, query: str) -> AgentResult:
         if not answer_body:
             # Non-LLM/parse fallback: provide query-specific extracted facts.
             answer_body = _heuristic_answer(query, top)
-        answer = answer_body.strip()
+        answer = _two_sentences(answer_body.strip())
         src_block = _format_sources(used_urls)
         if src_block:
             answer = f"{answer}\n\n{src_block}"
@@ -445,10 +525,7 @@ def answer_faq(session: Session, query: str) -> AgentResult:
             sources.append(url)
         if len(sources) >= 2:
             break
-    response = (
-        "I found relevant information in the knowledge base, but cannot confidently synthesize a precise final value without LLM support. "
-        "Please enable LLM keys for high-quality synthesized FAQ responses."
-    )
+    response = _two_sentences(_heuristic_answer(query, top))
     src_block = _format_sources(sources)
     if src_block:
         response = f"{response}\n\n{src_block}"
