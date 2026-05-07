@@ -101,6 +101,14 @@ const AGENT_COLORS: Record<string, string> = {
   memory_agent: "bg-emerald-100 text-emerald-800",
 };
 
+type ProgressState = "working" | "done" | "blocked";
+type ProgressItem = {
+  id: string;
+  label: string;
+  detail: string;
+  state: ProgressState;
+};
+
 function voiceTtsText(data: ChatApiResponse): string {
   const cleaned = data.response
     .split("\n")
@@ -140,6 +148,42 @@ function inferProcessingText(input: string): string {
     return "Analyzing current trends...";
   }
   return "Searching knowledge base...";
+}
+
+function friendlyStageLabel(agent: string): string {
+  const a = (agent || "").toLowerCase();
+  if (a === "orchestrator") return "Understanding your request";
+  if (a === "rag_agent") return "Checking fund information";
+  if (a === "scheduling_agent") return "Checking appointment options";
+  if (a === "review_intelligence_agent") return "Checking trend insights";
+  if (a === "memory_agent") return "Saving context for continuity";
+  if (a === "email_drafting_agent") return "Preparing advisor message";
+  return "Processing your request";
+}
+
+function friendlyTraceDetail(t: AgentTrace): string {
+  const outcome = (t.outcome || "").toLowerCase();
+  if (outcome.includes("invalid_time_request")) return "Need one detail to continue booking.";
+  if (outcome.includes("awaiting")) return "Waiting for your confirmation.";
+  if (outcome.includes("conflict")) return "That slot is already held; pick another time.";
+  if (outcome.includes("fallback") || outcome.includes("error")) return "Temporary issue; retrying safely.";
+  if (outcome.includes("slots_returned")) return "Available slots are ready.";
+  return "Completed.";
+}
+
+function progressStateFromTrace(t: AgentTrace): ProgressState {
+  const outcome = (t.outcome || "").toLowerCase();
+  if (
+    outcome.includes("invalid") ||
+    outcome.includes("conflict") ||
+    outcome.includes("needs_") ||
+    outcome.includes("error") ||
+    outcome.includes("fallback")
+  ) {
+    return "blocked";
+  }
+  if (outcome.includes("awaiting")) return "working";
+  return "done";
 }
 
 function pickPreferredVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
@@ -623,6 +667,38 @@ export function ChatClient({ initialName }: { initialName: string }) {
 
   const processingText = inferProcessingText(input || messages.at(-1)?.text || "");
   const bookingCode = typeof lastPayload?.booking_code === "string" ? lastPayload.booking_code : null;
+  const debugAgentTrace =
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debugAgents") === "1";
+  const progressItems = useMemo<ProgressItem[]>(() => {
+    if (isLoading) {
+      return [
+        {
+          id: "working-now",
+          label: "Working on your request",
+          detail: processingText,
+          state: "working",
+        },
+      ];
+    }
+    if (!traces.length) {
+      return [
+        {
+          id: "idle",
+          label: "Ready",
+          detail: "Ask a question and I will show progress here.",
+          state: "done",
+        },
+      ];
+    }
+    const latestByAgent = new Map<string, AgentTrace>();
+    for (const t of traces) latestByAgent.set(t.agent, t);
+    return Array.from(latestByAgent.entries()).map(([agent, t]) => ({
+      id: agent,
+      label: friendlyStageLabel(agent),
+      detail: friendlyTraceDetail(t),
+      state: progressStateFromTrace(t),
+    }));
+  }, [traces, isLoading, processingText]);
 
   return (
     <section className="mt-6 grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">
@@ -802,7 +878,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
 
       <aside className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-slate-900">Agent Activity</h2>
+          <h2 className="text-sm font-semibold text-slate-900">
+            {debugAgentTrace ? "Agent Activity (Debug)" : "How Finn Is Helping"}
+          </h2>
           <button
             type="button"
             className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700"
@@ -813,43 +891,63 @@ export function ChatClient({ initialName }: { initialName: string }) {
         </div>
 
         {showAgentPanel ? (
-          traces.length ? (
-            <div className="space-y-2">
-              {traces.map((t, idx) => (
-                <div key={`${t.agent}-${idx}`} className="rounded-lg border border-slate-200 p-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span
-                      className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
-                        AGENT_COLORS[t.agent] || "bg-slate-100 text-slate-700"
-                      }`}
-                    >
-                      {t.agent}
-                    </span>
-                    <span className="text-[11px] text-slate-500">
-                      {t.replanned ? "Replanned" : "Single pass"}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-xs text-slate-700">{t.reasoning_brief}</p>
-                  {t.tools?.length > 0 && (
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      {t.tools.map((tool) => (
-                        <span
-                          key={tool}
-                          className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600"
-                        >
-                          {tool}
-                        </span>
-                      ))}
+          debugAgentTrace ? (
+            traces.length ? (
+              <div className="space-y-2">
+                {traces.map((t, idx) => (
+                  <div key={`${t.agent}-${idx}`} className="rounded-lg border border-slate-200 p-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
+                          AGENT_COLORS[t.agent] || "bg-slate-100 text-slate-700"
+                        }`}
+                      >
+                        {t.agent}
+                      </span>
+                      <span className="text-[11px] text-slate-500">
+                        {t.replanned ? "Replanned" : "Single pass"}
+                      </span>
                     </div>
-                  )}
-                  <p className="mt-1 text-[11px] text-slate-500">Outcome: {t.outcome}</p>
+                    <p className="mt-1 text-xs text-slate-700">{t.reasoning_brief}</p>
+                    {t.tools?.length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {t.tools.map((tool) => (
+                          <span
+                            key={tool}
+                            className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600"
+                          >
+                            {tool}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <p className="mt-1 text-[11px] text-slate-500">Outcome: {t.outcome}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500">Debug traces will appear after your first message.</p>
+            )
+          ) : (
+            <div className="space-y-2">
+              {progressItems.map((p) => (
+                <div key={p.id} className="rounded-lg border border-slate-200 px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`inline-block h-2.5 w-2.5 rounded-full ${
+                        p.state === "done"
+                          ? "bg-emerald-500"
+                          : p.state === "working"
+                            ? "animate-pulse bg-amber-500"
+                            : "bg-rose-500"
+                      }`}
+                    />
+                    <p className="text-xs font-semibold text-slate-800">{p.label}</p>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-600">{p.detail}</p>
                 </div>
               ))}
             </div>
-          ) : (
-            <p className="text-xs text-slate-500">
-              Agent traces will appear here after your first message.
-            </p>
           )
         ) : (
           <p className="text-xs text-slate-500">Panel collapsed.</p>

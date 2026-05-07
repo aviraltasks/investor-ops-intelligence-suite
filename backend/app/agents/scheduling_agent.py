@@ -194,6 +194,87 @@ def _extract_time_ist(text: str) -> tuple[str, str] | None:
     return dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M IST")
 
 
+def _extract_time_ist_with_reason(text: str) -> tuple[tuple[str, str] | None, str]:
+    """Return ((date, time) | None, reason_code) for better user guidance."""
+    time_src = re.sub(r"\bGRW-W-[A-Z0-9]{4}\b", " ", text, flags=re.IGNORECASE)
+    time_src = re.sub(r"\bGRW-[A-Z0-9]{4}\b", " ", time_src, flags=re.IGNORECASE)
+    now = datetime.now()
+    day = now.date()
+    t = time_src.lower()
+    t = re.sub(r"\ba\.\s*m\.?\b", "am", t)
+    t = re.sub(r"\bp\.\s*m\.?\b", "pm", t)
+    has_date_hint = any(
+        x in t
+        for x in (
+            "today",
+            "tomorrow",
+            "next week",
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday",
+        )
+    )
+    if any(x in t for x in ["sometime", "whenever", "soon"]):
+        return None, "ambiguous_time"
+    if "yesterday" in t or "last monday" in t or "last week" in t:
+        return None, "past_time"
+    if "saturday" in t or "sunday" in t or "weekend" in t:
+        return None, "weekend"
+    if "tomorrow" in t:
+        day = day + timedelta(days=1)
+        while day.weekday() >= 5:
+            day = day + timedelta(days=1)
+    if "next week" in t:
+        day = day + timedelta(days=7)
+        while day.weekday() >= 5:
+            day = day + timedelta(days=1)
+    m = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", t)
+    if not m:
+        compact = re.search(r"\b(\d{3,4})\s*(am|pm)\b", t)
+        if compact:
+            raw = compact.group(1)
+            ampm = compact.group(2)
+            if len(raw) == 3:
+                hh = int(raw[0])
+                mm = int(raw[1:])
+            else:
+                hh = int(raw[:2])
+                mm = int(raw[2:])
+            if ampm == "pm" and hh < 12:
+                hh += 12
+            if ampm == "am" and hh == 12:
+                hh = 0
+            m = None
+        else:
+            m = re.search(r"\b(\d{1,2})(?::(\d{2}))?\b", t)
+            if not m:
+                return None, "missing_time"
+            hh = int(m.group(1))
+            mm = int(m.group(2) or 0)
+    if m:
+        hh = int(m.group(1))
+        mm = int(m.group(2) or 0)
+        ampm = m.group(3)
+        if ampm == "pm" and hh < 12:
+            hh += 12
+        if ampm == "am" and hh == 12:
+            hh = 0
+    if hh < 9 or hh > 18 or (hh == 18 and mm > 0):
+        return None, "outside_hours"
+    dt = datetime(day.year, day.month, day.day, hh, mm)
+    if dt.weekday() >= 5:
+        return None, "weekend"
+    if dt < now:
+        if not has_date_hint:
+            return None, "missing_date"
+        return None, "past_time"
+    return (dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M IST")), "ok"
+
+
 def _wants_reschedule(msg: str) -> bool:
     m = msg.lower()
     if "reschedule" in m:
@@ -799,7 +880,7 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
                 payload={"booking_code": booking.booking_code, "status": "waitlisted"},
             )
 
-        slot = _extract_time_ist(message)
+        slot, slot_reason = _extract_time_ist_with_reason(message)
         if slot is None:
             traces.append(
                 AgentTraceStep(
@@ -809,10 +890,24 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
                     outcome="reschedule_needs_new_slot",
                 )
             )
+            followup = "What new weekday time should I move it to (Mon–Fri, 9:00 AM–6:00 PM IST)?"
+            if slot_reason == "missing_date":
+                followup = (
+                    "I got the time, but I still need the date. "
+                    "Please share a weekday date with time (example: tomorrow 5 pm IST)."
+                )
+            elif slot_reason == "outside_hours":
+                followup = "That time is outside advisor hours. Please share a weekday slot between 9:00 AM and 6:00 PM IST."
+            elif slot_reason == "weekend":
+                followup = "I can only schedule on weekdays. Please share a Mon–Fri date and time in IST."
+            elif slot_reason == "ambiguous_time":
+                followup = "Please share a specific time and date (example: tomorrow at 10 am IST)."
+            elif slot_reason == "past_time":
+                followup = "That looks like a past slot. Please share a future weekday date and time in IST."
             return AgentResult(
                 response_text=(
                 f"Found booking {booking.booking_code} ({booking.topic}, {booking.date} {booking.time_ist} IST). "
-                "What new weekday time should I move it to (Mon–Fri, 9:00 AM–6:00 PM IST)?"
+                f"{followup}"
                 ),
                 payload={
                     "booking_code": booking.booking_code,
@@ -1084,7 +1179,7 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
 
     # --- Book new (or implicit path) ---
     topic = _extract_topic(message)
-    slot = _extract_time_ist(message)
+    slot, slot_reason = _extract_time_ist_with_reason(message)
     if slot is None:
         waitlist_hint = ""
         if not _dedicated_waitlist_request(message):
@@ -1092,16 +1187,29 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
                 "\n\nIf no weekday slot works, say **join waitlist for KYC** (or your topic) and I will add you "
                 "with a waitlist code (GRW-W-XXXX) and advisor hold per our process."
             )
+        guidance = (
+            "What weekday time works for you in IST (Mon–Fri, 9:00 AM–6:00 PM)? "
+            "For example: tomorrow at 10 am IST."
+        )
+        if slot_reason == "missing_date":
+            guidance = (
+                "I got your time, but I need the date too. "
+                "Please share weekday date + time in IST (example: tomorrow at 5 pm)."
+            )
+        elif slot_reason == "outside_hours":
+            guidance = "That time is outside advisor hours. Please share a weekday slot between 9:00 AM and 6:00 PM IST."
+        elif slot_reason == "weekend":
+            guidance = "I can only book weekdays. Please share a Mon–Fri date and time in IST."
+        elif slot_reason == "past_time":
+            guidance = "That looks like a past slot. Please share a future weekday date and time in IST."
+        elif slot_reason == "ambiguous_time":
+            guidance = "Please share a specific weekday date and time in IST (example: tomorrow at 10 am)."
         return AgentResult(
-            response_text=(
-                "What weekday time works for you in IST (Mon–Fri, 9:00 AM–6:00 PM)? "
-                "For example: tomorrow at 10 am IST."
-                + waitlist_hint
-            ),
+            response_text=(guidance + waitlist_hint),
             traces=[
                 AgentTraceStep(
                     agent="scheduling_agent",
-                    reasoning_brief="Rejected scheduling input due to invalid, ambiguous, past, weekend, or out-of-hours time.",
+                    reasoning_brief=f"Rejected scheduling input with reason={slot_reason}; asked targeted clarification.",
                     tools=["time_parser", "working_hours_guard", "weekday_guard"],
                     outcome="invalid_time_request",
                 )
