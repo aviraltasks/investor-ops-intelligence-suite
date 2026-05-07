@@ -55,7 +55,7 @@ def test_generate_pulse_persists_and_structures(monkeypatch, tmp_path) -> None:
     with SessionLocal() as session:
         _seed_reviews(session)
         pulse = generate_pulse(session, sample_size=100)
-        assert pulse["review_count"] >= 30
+        assert pulse["review_count"] >= 3
         assert len(pulse["top_themes"]) == 3
         assert len(pulse["actions"]) == 3
         assert pulse["metrics"]["algorithm"] == "custom_kmeans_numpy"
@@ -86,3 +86,87 @@ def test_latest_and_history(monkeypatch, tmp_path) -> None:
         assert latest["pulse_id"] == second["pulse_id"]
         hist = list_pulse_history(session, limit=10)
         assert len(hist) >= 2
+
+
+def test_generate_pulse_applies_quality_gate(monkeypatch, tmp_path) -> None:
+    db_file = tmp_path / "phase3_quality_gate.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("EMBEDDING_MODEL", "hash")
+    reset_settings()
+    reset_engine()
+    init_db()
+
+    SessionLocal = get_session_factory()
+    with SessionLocal() as session:
+        # Robust reviews (should pass quality gate)
+        for i in range(7):
+            session.add(
+                Review(
+                    external_id=f"r-login-{i}",
+                    content="Login failed after update because otp verification is stuck on loading screen.",
+                    score=1.0,
+                    source="csv_fallback",
+                )
+            )
+        for i in range(6):
+            session.add(
+                Review(
+                    external_id=f"r-kyc-{i}",
+                    content="KYC verification failed after document upload and bank linking is pending.",
+                    score=2.0,
+                    source="csv_fallback",
+                )
+            )
+        for i in range(6):
+            session.add(
+                Review(
+                    external_id=f"r-sip-{i}",
+                    content="SIP mandate setup shows error during payment and autopay is not activated.",
+                    score=2.0,
+                    source="csv_fallback",
+                )
+            )
+        # Junk / weak signal (should be dropped)
+        for i in range(5):
+            session.add(Review(external_id=f"junk-emoji-{i}", content="🔥🔥🔥", score=5.0, source="csv_fallback"))
+        for i in range(5):
+            session.add(Review(external_id=f"junk-short-{i}", content="bad app", score=1.0, source="csv_fallback"))
+        for i in range(3):
+            session.add(
+                Review(
+                    external_id=f"dup-{i}",
+                    content="Login failed after update because otp verification is stuck on loading screen.",
+                    score=1.0,
+                    source="csv_fallback",
+                )
+            )
+        session.commit()
+
+        pulse = generate_pulse(session, sample_size=200)
+        q = pulse["comparison"]["quality_gate"]
+        assert q["fetched"] >= 25
+        assert (q["junk_filtered"] + q["duplicate_filtered"]) >= 8
+        assert q["duplicate_filtered"] >= 2
+        assert q["used_for_themes"] >= 3
+        assert pulse["metrics"]["sample_size"] == q["used_for_themes"]
+        assert pulse["metrics"]["raw_sample_size"] == q["fetched"]
+
+
+def test_generate_pulse_fails_when_only_noise(monkeypatch, tmp_path) -> None:
+    db_file = tmp_path / "phase3_only_noise.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("EMBEDDING_MODEL", "hash")
+    reset_settings()
+    reset_engine()
+    init_db()
+
+    SessionLocal = get_session_factory()
+    with SessionLocal() as session:
+        for i in range(30):
+            session.add(Review(external_id=f"noise-{i}", content="ok", score=3.0, source="csv_fallback"))
+        session.commit()
+        try:
+            generate_pulse(session, sample_size=50)
+            raise AssertionError("expected ValueError for unusable reviews")
+        except ValueError as exc:
+            assert "No usable reviews" in str(exc)

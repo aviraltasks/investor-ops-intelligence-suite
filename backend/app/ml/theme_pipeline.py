@@ -46,6 +46,156 @@ STOPWORDS = {
 }
 
 TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9\-]{2,}")
+NON_WORD_RE = re.compile(r"[^A-Za-z0-9\s]")
+DOMAIN_TERMS = {
+    "login",
+    "kyc",
+    "sip",
+    "upi",
+    "portfolio",
+    "order",
+    "orders",
+    "withdrawal",
+    "withdraw",
+    "mandate",
+    "otp",
+    "crash",
+    "lag",
+    "slow",
+    "payment",
+    "fund",
+    "nav",
+    "expense",
+    "ratio",
+    "statement",
+    "verification",
+    "bank",
+}
+SPAM_PATTERNS = (
+    "referral code",
+    "use my code",
+    "promo code",
+    "coupon",
+    "http://",
+    "https://",
+    "t.me/",
+)
+MIN_REVIEW_CHARS = 8
+MIN_REVIEW_WORDS = 3
+MAX_SYMBOL_RATIO = 0.5
+MIN_THEME_REVIEWS = 5
+MIN_THEME_KEYWORDS = 2
+MAX_REPEAT_PER_NORMALIZED_REVIEW = 3
+
+
+@dataclass
+class QualityEvaluation:
+    bucket: str  # usable_high | usable_medium | weak_signal | junk
+    score: int
+    reasons: list[str]
+
+
+def _normalize_for_dedupe(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip().lower())
+
+
+def _symbol_ratio(text: str) -> float:
+    if not text:
+        return 1.0
+    symbols = len(NON_WORD_RE.findall(text))
+    return symbols / max(len(text), 1)
+
+
+def _looks_like_star_only(text: str) -> bool:
+    t = text.strip().lower()
+    return t in {"1 star", "2 star", "3 star", "4 star", "5 star", "one star", "five star"}
+
+
+def _quality_eval(text: str) -> QualityEvaluation:
+    cleaned = " ".join((text or "").strip().split())
+    if not cleaned:
+        return QualityEvaluation(bucket="junk", score=0, reasons=["empty"])
+    if len(cleaned) < MIN_REVIEW_CHARS:
+        return QualityEvaluation(bucket="junk", score=0, reasons=["too_short_chars"])
+    words = re.findall(r"[A-Za-z0-9]+", cleaned)
+    if len(words) < MIN_REVIEW_WORDS:
+        return QualityEvaluation(bucket="junk", score=0, reasons=["too_short_words"])
+    if _symbol_ratio(cleaned) > MAX_SYMBOL_RATIO:
+        return QualityEvaluation(bucket="junk", score=0, reasons=["symbol_heavy"])
+    low = cleaned.lower()
+    if any(p in low for p in SPAM_PATTERNS):
+        return QualityEvaluation(bucket="junk", score=0, reasons=["spam_pattern"])
+    if _looks_like_star_only(low):
+        return QualityEvaluation(bucket="junk", score=0, reasons=["rating_only"])
+
+    score = 0
+    reasons: list[str] = []
+    toks = _tokenize(cleaned)
+    has_domain = any(t in DOMAIN_TERMS for t in toks)
+    if has_domain:
+        score += 2
+        reasons.append("specific_domain_context")
+    elif len(toks) >= 5:
+        score += 1
+        reasons.append("some_context")
+
+    if any(k in low for k in ("because", "after", "during", "when", "failed", "error", "issue", "stuck", "pending", "not ")):
+        score += 2
+        reasons.append("actionable_detail")
+    elif len(toks) >= 7:
+        score += 1
+        reasons.append("actionability_partial")
+
+    # Basic legibility gate: enough word-like tokens in the sentence.
+    word_ratio = len("".join(ch for ch in cleaned if ch.isalnum() or ch.isspace()).split()) / max(len(words), 1)
+    if word_ratio >= 0.8:
+        score += 1
+        reasons.append("legible")
+
+    if score >= 4:
+        bucket = "usable_high"
+    elif score >= 2:
+        bucket = "usable_medium"
+    elif score == 1:
+        bucket = "weak_signal"
+    else:
+        bucket = "junk"
+    return QualityEvaluation(bucket=bucket, score=score, reasons=reasons)
+
+
+def _filter_reviews_for_pulse(texts: list[str]) -> tuple[list[str], dict[str, Any]]:
+    seen_counts: dict[str, int] = {}
+    usable: list[str] = []
+    counters = {
+        "fetched": len(texts),
+        "used_for_themes": 0,
+        "junk_filtered": 0,
+        "duplicate_filtered": 0,
+        "weak_signal_excluded_from_theming": 0,
+        "usable_high": 0,
+        "usable_medium": 0,
+    }
+    for raw in texts:
+        norm = _normalize_for_dedupe(raw)
+        if not norm:
+            counters["junk_filtered"] += 1
+            continue
+        count = seen_counts.get(norm, 0)
+        if count >= MAX_REPEAT_PER_NORMALIZED_REVIEW:
+            counters["duplicate_filtered"] += 1
+            continue
+        seen_counts[norm] = count + 1
+        q = _quality_eval(raw)
+        if q.bucket == "junk":
+            counters["junk_filtered"] += 1
+            continue
+        if q.bucket == "weak_signal":
+            counters["weak_signal_excluded_from_theming"] += 1
+            continue
+        usable.append(raw.strip())
+        counters[q.bucket] += 1
+    counters["used_for_themes"] = len(usable)
+    return usable, counters
 
 
 @dataclass
@@ -238,9 +388,12 @@ def generate_pulse(session: Session, sample_size: int = 500) -> dict[str, Any]:
     if not reviews:
         raise ValueError("No reviews available. Run /api/reviews/refresh first.")
 
-    texts = [r.content for r in reviews if r.content and r.content.strip()]
-    if not texts:
+    raw_texts = [r.content for r in reviews if r.content and r.content.strip()]
+    if not raw_texts:
         raise ValueError("No non-empty reviews available for pulse generation.")
+    texts, quality = _filter_reviews_for_pulse(raw_texts)
+    if not texts:
+        raise ValueError("No usable reviews available after quality filtering.")
 
     embedder = get_embedder()
     x = embedder.encode(texts)
@@ -253,20 +406,30 @@ def generate_pulse(session: Session, sample_size: int = 500) -> dict[str, Any]:
 
     cluster_rows: list[dict[str, Any]] = []
     for _, cluster_texts in grouped.items():
+        keyword_count = len(set(_tokenize(" ".join(cluster_texts))))
         cluster_rows.append(
             {
                 "texts": cluster_texts,
                 "label": _label_cluster(cluster_texts),
                 "volume": len(cluster_texts),
                 "quote": _quote_for_cluster(cluster_texts),
+                "keyword_count": keyword_count,
             }
         )
     cluster_rows.sort(key=lambda x: x["volume"], reverse=True)
-    cluster_rows = cluster_rows[:3]
+    if not cluster_rows:
+        raise ValueError("No themes found after quality filtering.")
+    robust_rows = [
+        row for row in cluster_rows if row["volume"] >= MIN_THEME_REVIEWS and row["keyword_count"] >= MIN_THEME_KEYWORDS
+    ]
+    selected_rows = (robust_rows or cluster_rows)[:3]
+    quality["theme_threshold_relaxed"] = len(robust_rows) == 0
+    quality["theme_min_reviews"] = MIN_THEME_REVIEWS
+    quality["theme_min_keywords"] = MIN_THEME_KEYWORDS
 
     themes: list[dict[str, Any]] = []
     used_llm_labels = False
-    for row in cluster_rows:
+    for row in selected_rows:
         label = row["label"]
         alt = _llm_cluster_short_label(row["texts"])
         if alt:
@@ -289,12 +452,15 @@ def generate_pulse(session: Session, sample_size: int = 500) -> dict[str, Any]:
         "reproducibility_ml_clustering": True,
         "reproducibility_token_baseline": True,
         "token_cost_hint": cost_hint,
+        "quality_gate": quality,
     }
     metrics = {
         "algorithm": "custom_kmeans_numpy",
         "sample_size": len(texts),
+        "raw_sample_size": len(raw_texts),
         "cluster_count": len(set(labels)),
         "silhouette": round(float(clustering.silhouette), 4),
+        "quality_threshold_used": "usable_medium_or_high_only",
     }
 
     date_from = min((r.review_at for r in reviews if r.review_at), default=None)
