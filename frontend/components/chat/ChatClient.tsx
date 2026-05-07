@@ -198,6 +198,14 @@ function voiceModeHelperText(state: VoiceModeState, processingSlow: boolean): st
   return "";
 }
 
+function isVoiceActive(state: VoiceModeState): boolean {
+  return state !== "off" && state !== "error_fallback";
+}
+
+function isVoiceSpeakingState(state: VoiceModeState): boolean {
+  return state === "speaking_welcome" || state === "speaking_reply";
+}
+
 function pickPreferredVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
   if (!voices.length) return null;
   const normalized = voices.map((v) => ({
@@ -417,13 +425,13 @@ export function ChatClient({ initialName }: { initialName: string }) {
         const code = (evt?.error || "").toLowerCase();
         if (code === "not-allowed" || code === "service-not-allowed") {
           setVoiceBanner("Mic permission is blocked. Please allow microphone access in browser settings.");
-          if (voiceModeStateRef.current !== "off") {
+          if (isVoiceActive(voiceModeStateRef.current)) {
             transitionVoice("VOICE_FAILURE");
             setVoiceBanner("Voice unavailable, continuing in text");
           }
           return;
         }
-        if (voiceModeStateRef.current !== "off") {
+        if (isVoiceActive(voiceModeStateRef.current)) {
           transitionVoice("VOICE_FAILURE");
           setVoiceBanner("Voice unavailable, continuing in text");
           return;
@@ -432,7 +440,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
       };
       recognition.onend = () => {
         recognitionActiveRef.current = false;
-        if (autoListenQueuedRef.current && voiceModeStateRef.current !== "off" && voiceModeStateRef.current !== "error_fallback") {
+        if (autoListenQueuedRef.current && isVoiceActive(voiceModeStateRef.current)) {
           autoListenQueuedRef.current = false;
           requestStartListening(140);
           return;
@@ -471,7 +479,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
       const firstInteraction = !hasUserInteractedRef.current;
       hasUserInteractedRef.current = true;
       unlockTts();
-      if (voiceModeStateRef.current === "off" || voiceModeStateRef.current === "error_fallback") return;
+      if (!isVoiceActive(voiceModeStateRef.current)) return;
       if (autoWelcomeAttemptedRef.current && !welcomeSpokenRef.current && typeof window !== "undefined" && !window.speechSynthesis.speaking) {
         autoWelcomeAttemptedRef.current = false;
         speak(welcomeText, { autoListen: true });
@@ -556,7 +564,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
         welcomeSpokenRef.current = true;
         welcomeSpeechPendingRef.current = false;
         autoWelcomeAttemptedRef.current = false;
-        if (voiceModeStateRef.current === "starting" || voiceModeStateRef.current === "off") {
+        if (voiceModeStateRef.current === "starting" || !isVoiceActive(voiceModeStateRef.current)) {
           transitionVoice("WELCOME_SPEECH_STARTED");
         }
       } else if (voiceModeStateRef.current === "processing" || voiceModeStateRef.current === "listening") {
@@ -597,7 +605,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
         }
         return;
       }
-      if (voiceModeStateRef.current !== "off") {
+      if (isVoiceActive(voiceModeStateRef.current)) {
         transitionVoice("VOICE_FAILURE");
         setVoiceBanner("Voice unavailable, continuing in text");
       }
@@ -644,7 +652,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
             setVoiceBanner("Tap anywhere once to enable voice in this browser.");
             return;
           }
-          if (voiceModeStateRef.current !== "off") {
+          if (isVoiceActive(voiceModeStateRef.current)) {
             transitionVoice("VOICE_FAILURE");
             setVoiceBanner("Voice unavailable, continuing in text");
           }
@@ -677,7 +685,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
     speechStartTimeoutRef.current = window.setTimeout(() => {
       if (ttsStateRef.current !== "started") {
         setTtsState("error");
-        if (voiceModeStateRef.current !== "off") {
+        if (isVoiceActive(voiceModeStateRef.current)) {
           transitionVoice("VOICE_FAILURE");
           setVoiceBanner("Voice unavailable, continuing in text");
         }
@@ -722,7 +730,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
       setTraces(data.traces || []);
       setLastPayload(data.payload || null);
       // Hands-free voice mode: speak every assistant reply, then auto-listen.
-      if (voiceModeStateRef.current !== "off" && voiceModeStateRef.current !== "error_fallback" && ttsSupported) {
+      if (isVoiceActive(voiceModeStateRef.current) && ttsSupported) {
         speak(voiceTtsText(data), { autoListen: true });
       }
     } catch (e) {
@@ -736,7 +744,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
           text: "I’m having trouble reaching the backend right now. Please try again in a moment.",
         },
       ]);
-      if (voiceModeStateRef.current !== "off") {
+      if (isVoiceActive(voiceModeStateRef.current)) {
         transitionVoice("VOICE_FAILURE");
         setVoiceBanner("Voice unavailable, continuing in text");
       }
@@ -748,8 +756,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
       }
       autoListenWatchdogRef.current = window.setTimeout(() => {
         if (
-          voiceModeStateRef.current !== "off" &&
-          voiceModeStateRef.current !== "error_fallback" &&
+          isVoiceActive(voiceModeStateRef.current) &&
           sttSupported &&
           !recognitionActiveRef.current &&
           micStateRef.current === "idle"
@@ -778,7 +785,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
       setVoiceBanner("Voice recognizer is not initialized. Please use text.");
       return;
     }
-    if (voiceModeStateRef.current === "speaking_reply" || voiceModeStateRef.current === "speaking_welcome") {
+    if (isVoiceSpeakingState(voiceModeStateRef.current)) {
       return;
     }
     if (micState === "listening") {
@@ -919,14 +926,14 @@ export function ChatClient({ initialName }: { initialName: string }) {
         <div className="mb-3 flex items-center justify-between gap-2">
           <div>
             <p className="text-xs font-semibold text-slate-700">Voice Mode</p>
-            {showVoiceHint && voiceModeState === "off" && (
+            {showVoiceHint && !isVoiceActive(voiceModeState) && (
               <p className="text-xs text-slate-500">Hands-free conversation with Finn. Tap to start.</p>
             )}
             {voiceModeHelperText(voiceModeState, voiceProcessingSlow) && (
               <p className="text-xs text-slate-600">{voiceModeHelperText(voiceModeState, voiceProcessingSlow)}</p>
             )}
           </div>
-          {voiceModeState === "off" || voiceModeState === "error_fallback" ? (
+          {!isVoiceActive(voiceModeState) ? (
             <button
               type="button"
               onClick={onEnableVoiceMode}
