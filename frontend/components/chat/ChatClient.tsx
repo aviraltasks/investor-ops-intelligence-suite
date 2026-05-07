@@ -149,9 +149,12 @@ function pickPreferredVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoic
     lang: (v.lang || "").toLowerCase(),
     name: (v.name || "").toLowerCase(),
   }));
-  const femaleHint = /(female|samantha|zira|aria|natasha|heera|veena|alloy)/;
+  const femaleHint = /(female|samantha|zira|aria|natasha|heera|veena|alloy|priya|aditi|swara|saanvi)/;
   const premiumHint = /(neural|natural|wavenet|google|microsoft|enhanced|premium)/;
+  const indiaFemaleHint = /(heera|priya|aditi|swara|veena|saanvi|india|en-in|english \(india\))/;
   return (
+    normalized.find((v) => v.lang.startsWith("en-in") && indiaFemaleHint.test(v.name) && premiumHint.test(v.name))?.voice ||
+    normalized.find((v) => v.lang.startsWith("en-in") && indiaFemaleHint.test(v.name))?.voice ||
     normalized.find((v) => v.lang.startsWith("en-in") && femaleHint.test(v.name) && premiumHint.test(v.name))?.voice ||
     normalized.find((v) => v.lang.startsWith("en-in") && femaleHint.test(v.name))?.voice ||
     normalized.find((v) => v.lang.startsWith("en") && femaleHint.test(v.name) && premiumHint.test(v.name))?.voice ||
@@ -346,10 +349,19 @@ export function ChatClient({ initialName }: { initialName: string }) {
       }
     };
     const markInteractedAndSpeakWelcome = () => {
-      if (hasUserInteractedRef.current) return;
+      const firstInteraction = !hasUserInteractedRef.current;
       hasUserInteractedRef.current = true;
       unlockTts();
-      if (welcomeSpeechPendingRef.current) {
+      if (
+        autoWelcomeAttemptedRef.current &&
+        typeof window !== "undefined" &&
+        !window.speechSynthesis.speaking
+      ) {
+        autoWelcomeAttemptedRef.current = false;
+        speak(welcomeText, { autoListen: true });
+        return;
+      }
+      if (firstInteraction && welcomeSpeechPendingRef.current) {
         welcomeSpeechPendingRef.current = false;
         if (hasSynthesis) {
           speak(welcomeText, { autoListen: true });
@@ -367,7 +379,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
       window.sessionStorage.getItem("finn_voice_bootstrap") === "1";
     if (shouldVoiceBootstrap) {
       window.sessionStorage.removeItem("finn_voice_bootstrap");
-      hasUserInteractedRef.current = true;
+      autoWelcomeAttemptedRef.current = true;
     }
     if (shouldAutoWelcome && hasSynthesis) {
       window.sessionStorage.removeItem("finn_autoplay_welcome");
@@ -431,7 +443,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
       stopListening();
     }
     window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
+    const cleanText = (text || "").replace(/\s+/g, " ").trim();
+    if (!cleanText) return;
+    const utterance = new SpeechSynthesisUtterance(cleanText);
     const preferred = preferredVoiceRef.current;
     utterance.lang = preferred?.lang || "en-IN";
     const selectedVoice =
@@ -440,8 +454,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
         .find((v) => preferred && v.name === preferred.name && v.lang === preferred.lang) ||
       pickPreferredVoice(window.speechSynthesis.getVoices());
     if (selectedVoice) utterance.voice = selectedVoice;
-    utterance.rate = 1;
-    utterance.pitch = 1;
+    utterance.rate = 0.95;
+    utterance.pitch = 1.02;
     utterance.volume = 1;
     utterance.onstart = () => {
       setMicState("speaking");
@@ -472,10 +486,10 @@ export function ChatClient({ initialName }: { initialName: string }) {
       }
       if (!ttsRetryRef.current) {
         ttsRetryRef.current = true;
-        const fallback = new SpeechSynthesisUtterance(text);
+        const fallback = new SpeechSynthesisUtterance(cleanText);
         fallback.lang = "en-US";
-        fallback.rate = 1;
-        fallback.pitch = 1;
+        fallback.rate = 0.95;
+        fallback.pitch = 1.02;
         fallback.volume = 1;
         fallback.onstart = () => {
           setMicState("speaking");
@@ -520,10 +534,11 @@ export function ChatClient({ initialName }: { initialName: string }) {
       setVoiceBanner("Text-to-speech failed. You can continue in text mode.");
     };
     synthesisUtteranceRef.current = utterance;
-    // Some browsers drop immediate speak calls; tiny delay makes TTS more reliable.
+    // Some browsers clip the first phrase when called too quickly after cancel/resume.
+    // A slightly longer delay reduces first-words truncation.
     window.setTimeout(() => {
       window.speechSynthesis.speak(utterance);
-    }, 40);
+    }, 140);
   }
 
   async function sendMessage(text: string) {
