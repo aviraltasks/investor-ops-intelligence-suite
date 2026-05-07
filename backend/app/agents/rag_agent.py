@@ -85,7 +85,16 @@ def _cache_set(query: str, answer: str, sources: list[str]) -> None:
 
 def _compact(text: str, *, max_len: int = 220) -> str:
     t = re.sub(r"\s+", " ", text or "").strip()
-    return t[:max_len].rstrip()
+    if len(t) <= max_len:
+        return t
+    cut = t[:max_len].rstrip()
+    m = re.search(r"[.!?](?!.*[.!?])", cut)
+    if m:
+        return cut[: m.end()].rstrip()
+    # Fallback: avoid broken trailing fragments.
+    if " " in cut:
+        cut = cut.rsplit(" ", 1)[0]
+    return cut.rstrip(" ,;:-")
 
 
 def _two_sentences(text: str) -> str:
@@ -400,6 +409,36 @@ def _deterministic_fund_only_prompt(query: str) -> tuple[str, list[str]] | None:
     return answer, []
 
 
+def _deterministic_domain_clarifier(query: str) -> tuple[str, list[str]] | None:
+    q = (query or "").strip().lower()
+    if not q:
+        return None
+    if "help with" not in q:
+        return None
+    if "kyc" in q or "onboarding" in q:
+        return (
+            _two_sentences(
+                "Sure — for KYC & Onboarding, do you want a quick checklist or to book an advisor call?"
+            ),
+            ["https://investor.sebi.gov.in/"],
+        )
+    if "sip" in q or "mandate" in q:
+        return (
+            _two_sentences(
+                "Sure — for SIP & mandates, are you asking setup basics, mandate failure troubleshooting, or advisor booking?"
+            ),
+            ["https://investor.sebi.gov.in/"],
+        )
+    if "account change" in q or "nominee" in q:
+        return (
+            _two_sentences(
+                "Sure — for account changes/nominee updates, do you want required documents, process steps, or advisor booking?"
+            ),
+            ["https://investor.sebi.gov.in/"],
+        )
+    return None
+
+
 def _merge_hits(session: Session, queries: list[str], top_per: int = 4) -> list[dict[str, Any]]:
     seen: set[str] = set()
     merged: list[dict[str, Any]] = []
@@ -444,6 +483,24 @@ def answer_faq(session: Session, query: str) -> AgentResult:
                 agent="rag_agent",
                 reasoning_brief="Detected ambiguous metric query and asked clarifying follow-up instead of assuming fund.",
                 tools=["faq.metric_clarifier"],
+                replanned=False,
+                outcome="clarification_prompt",
+            )
+        )
+        out = _compact(answer_body, max_len=220)
+        src_block = _format_sources(clarifier_sources)
+        if src_block:
+            out = f"{out}\n\n{src_block}"
+        return AgentResult(response_text=out, payload={"sources": clarifier_sources[:1], "confidence": "high"}, traces=traces)
+
+    domain_clarifier = _deterministic_domain_clarifier(query)
+    if domain_clarifier:
+        answer_body, clarifier_sources = domain_clarifier
+        traces.append(
+            AgentTraceStep(
+                agent="rag_agent",
+                reasoning_brief="Detected broad help-topic query and asked concise disambiguation prompt.",
+                tools=["faq.domain_clarifier"],
                 replanned=False,
                 outcome="clarification_prompt",
             )

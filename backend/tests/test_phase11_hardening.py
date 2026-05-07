@@ -94,3 +94,7 @@ def test_empty_and_emoji_input_handling(monkeypatch, tmp_path) -> None:
 
         name_q = _chat(client, "what is your name", session_id="input-1")
         assert "I am Finn" in name_q["response"]
+
+        quick_topic = _chat(client, "I want help with SIP & Mandates", session_id="input-1")
+        qtext = quick_topic["response"].lower()
+        assert "quick checklist" in qtext or "advisor call" in qtext

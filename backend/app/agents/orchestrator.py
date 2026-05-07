@@ -113,6 +113,23 @@ def _is_name_query(text: str) -> bool:
     )
 
 
+def _quick_topic_help_intent(text: str) -> str | None:
+    t = (text or "").lower()
+    if "help with" not in t:
+        return None
+    if "kyc" in t or "onboarding" in t:
+        return "KYC & Onboarding"
+    if "sip" in t or "mandate" in t:
+        return "SIP & Mandates"
+    if "statement" in t or "tax" in t:
+        return "Statements & Tax Documents"
+    if "withdraw" in t or "timeline" in t:
+        return "Withdrawals & Timelines"
+    if "account change" in t or "account changes" in t or "nominee" in t:
+        return "Account Changes & Nominee Updates"
+    return None
+
+
 def _compact_reply(text: str, *, max_len: int = 200) -> str:
     body = (text or "").strip()
     if not body:
@@ -235,6 +252,24 @@ def handle_chat_turn(session: Session, session_id: str, user_name: str, message:
                 ),
             ],
             payload={"intents": ["general"]},
+        )
+
+    quick_topic = _quick_topic_help_intent(sanitized_message)
+    if quick_topic:
+        return AgentResult(
+            response_text=(
+                f"Got it — {quick_topic}. Do you want 1) quick checklist, 2) issue troubleshooting, or 3) book an advisor call?"
+            ),
+            traces=[
+                *traces,
+                AgentTraceStep(
+                    agent="orchestrator",
+                    reasoning_brief="Detected quick-topic help prompt and asked concise clarification instead of broad RAG synthesis.",
+                    tools=["quick_topic_clarifier"],
+                    outcome="clarification_prompt",
+                ),
+            ],
+            payload={"intents": ["general"], "quick_topic": quick_topic, "status": "needs_topic_action_choice"},
         )
 
     allowed = {"faq", "scheduling", "memory_recall", "review_context", "general"}
