@@ -1,6 +1,8 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { nextVoiceModeState } from "./voiceModeStateMachine";
+import type { VoiceModeState } from "./voiceModeStateMachine";
 
 type Role = "assistant" | "user";
 
@@ -186,6 +188,16 @@ function progressStateFromTrace(t: AgentTrace): ProgressState {
   return "done";
 }
 
+function voiceModeHelperText(state: VoiceModeState, processingSlow: boolean): string {
+  if (state === "starting") return "Setting up voice session...";
+  if (state === "speaking_welcome") return "Finn is speaking...";
+  if (state === "listening") return "Listening...";
+  if (state === "processing") return processingSlow ? "Still thinking, hang on..." : "Got it - thinking...";
+  if (state === "speaking_reply") return "Finn is responding...";
+  if (state === "error_fallback") return "Voice unavailable, continuing in text";
+  return "";
+}
+
 function pickPreferredVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
   if (!voices.length) return null;
   const normalized = voices.map((v) => ({
@@ -227,6 +239,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const [sttSupported, setSttSupported] = useState(false);
   const [ttsSupported, setTtsSupported] = useState(false);
   const [voiceBanner, setVoiceBanner] = useState<string | null>(null);
+  const [voiceModeState, setVoiceModeState] = useState<VoiceModeState>("off");
+  const [showVoiceHint, setShowVoiceHint] = useState(false);
+  const [voiceProcessingSlow, setVoiceProcessingSlow] = useState(false);
   const [micState, setMicState] = useState<"idle" | "listening" | "processing" | "speaking">("idle");
   const [ttsState, setTtsState] = useState<TtsState>("idle");
   const [ttsErrorDetail, setTtsErrorDetail] = useState<string | null>(null);
@@ -247,7 +262,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const isLoadingRef = useRef(false);
   const micStateRef = useRef<"idle" | "listening" | "processing" | "speaking">("idle");
   const ttsStateRef = useRef<TtsState>("idle");
+  const voiceModeStateRef = useRef<VoiceModeState>("off");
   const voiceRestartAttemptsRef = useRef(0);
+  const processingSlowTimerRef = useRef<number | null>(null);
 
   const backendBaseUrl = useMemo(
     () => process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000",
@@ -278,6 +295,10 @@ export function ChatClient({ initialName }: { initialName: string }) {
   }, [ttsState]);
 
   useEffect(() => {
+    voiceModeStateRef.current = voiceModeState;
+  }, [voiceModeState]);
+
+  useEffect(() => {
     return () => {
       if (speechStartTimeoutRef.current !== null) {
         window.clearTimeout(speechStartTimeoutRef.current);
@@ -285,8 +306,26 @@ export function ChatClient({ initialName }: { initialName: string }) {
       if (autoListenWatchdogRef.current !== null) {
         window.clearTimeout(autoListenWatchdogRef.current);
       }
+      if (processingSlowTimerRef.current !== null) {
+        window.clearTimeout(processingSlowTimerRef.current);
+      }
     };
   }, []);
+
+  useEffect(() => {
+    if (processingSlowTimerRef.current !== null) {
+      window.clearTimeout(processingSlowTimerRef.current);
+      processingSlowTimerRef.current = null;
+    }
+    if (voiceModeState === "processing") {
+      setVoiceProcessingSlow(false);
+      processingSlowTimerRef.current = window.setTimeout(() => {
+        setVoiceProcessingSlow(true);
+      }, 5000);
+      return;
+    }
+    setVoiceProcessingSlow(false);
+  }, [voiceModeState]);
 
   useEffect(() => {
     const el = chatScrollRef.current;
@@ -313,6 +352,10 @@ export function ChatClient({ initialName }: { initialName: string }) {
       return;
     }
     run();
+  }
+
+  function transitionVoice(event: Parameters<typeof nextVoiceModeState>[1]) {
+    setVoiceModeState((cur) => nextVoiceModeState(cur, event));
   }
 
   function stopListening() {
@@ -363,6 +406,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
         }
         autoListenQueuedRef.current = false;
         setMicState("processing");
+        if (voiceModeStateRef.current === "listening") {
+          transitionVoice("USER_SPEECH_CAPTURED");
+        }
         void sendMessage(transcript);
       };
       recognition.onerror = (evt: SpeechRecognitionErrorEventLike) => {
@@ -371,13 +417,22 @@ export function ChatClient({ initialName }: { initialName: string }) {
         const code = (evt?.error || "").toLowerCase();
         if (code === "not-allowed" || code === "service-not-allowed") {
           setVoiceBanner("Mic permission is blocked. Please allow microphone access in browser settings.");
+          if (voiceModeStateRef.current !== "off") {
+            transitionVoice("VOICE_FAILURE");
+            setVoiceBanner("Voice unavailable, continuing in text");
+          }
+          return;
+        }
+        if (voiceModeStateRef.current !== "off") {
+          transitionVoice("VOICE_FAILURE");
+          setVoiceBanner("Voice unavailable, continuing in text");
           return;
         }
         setVoiceBanner("Voice input failed. Switched to text mode.");
       };
       recognition.onend = () => {
         recognitionActiveRef.current = false;
-        if (autoListenQueuedRef.current) {
+        if (autoListenQueuedRef.current && voiceModeStateRef.current !== "off" && voiceModeStateRef.current !== "error_fallback") {
           autoListenQueuedRef.current = false;
           requestStartListening(140);
           return;
@@ -398,6 +453,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
     window.speechSynthesis.onvoiceschanged = choosePreferredVoice;
 
     const stopSpeech = () => {
+      transitionVoice("PAGE_CLOSED");
       window.speechSynthesis.cancel();
       synthesisUtteranceRef.current = null;
       setMicState((cur) => (cur === "speaking" ? "idle" : cur));
@@ -415,42 +471,17 @@ export function ChatClient({ initialName }: { initialName: string }) {
       const firstInteraction = !hasUserInteractedRef.current;
       hasUserInteractedRef.current = true;
       unlockTts();
-      if (
-        autoWelcomeAttemptedRef.current &&
-        !welcomeSpokenRef.current &&
-        typeof window !== "undefined" &&
-        !window.speechSynthesis.speaking
-      ) {
+      if (voiceModeStateRef.current === "off" || voiceModeStateRef.current === "error_fallback") return;
+      if (autoWelcomeAttemptedRef.current && !welcomeSpokenRef.current && typeof window !== "undefined" && !window.speechSynthesis.speaking) {
         autoWelcomeAttemptedRef.current = false;
         speak(welcomeText, { autoListen: true });
         return;
       }
-      if (firstInteraction && welcomeSpeechPendingRef.current) {
-        welcomeSpeechPendingRef.current = false;
-        if (hasSynthesis) {
-          speak(welcomeText, { autoListen: true });
-          return;
-        }
-      }
-      requestStartListening();
+      if (firstInteraction && voiceModeStateRef.current !== "off") requestStartListening();
     };
-
-    const shouldAutoWelcome =
-      typeof window !== "undefined" &&
-      window.sessionStorage.getItem("finn_autoplay_welcome") === "1";
-    const shouldVoiceBootstrap =
-      typeof window !== "undefined" &&
-      window.sessionStorage.getItem("finn_voice_bootstrap") === "1";
-    if (shouldVoiceBootstrap) {
-      window.sessionStorage.removeItem("finn_voice_bootstrap");
-      autoWelcomeAttemptedRef.current = true;
-    }
-    if (shouldAutoWelcome && hasSynthesis) {
-      window.sessionStorage.removeItem("finn_autoplay_welcome");
-      autoWelcomeAttemptedRef.current = true;
-      window.setTimeout(() => {
-        speak(welcomeText, { autoListen: true });
-      }, 250);
+    if (typeof window !== "undefined") {
+      const seen = window.sessionStorage.getItem("finn_voice_mode_seen") === "1";
+      setShowVoiceHint(!seen);
     }
     const onVisibilityChange = () => {
       if (document.hidden) return;
@@ -467,6 +498,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
     window.addEventListener("beforeunload", stopSpeech);
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
+      transitionVoice("PAGE_CLOSED");
       try {
         recognitionRef.current?.stop();
       } catch {
@@ -524,6 +556,11 @@ export function ChatClient({ initialName }: { initialName: string }) {
         welcomeSpokenRef.current = true;
         welcomeSpeechPendingRef.current = false;
         autoWelcomeAttemptedRef.current = false;
+        if (voiceModeStateRef.current === "starting" || voiceModeStateRef.current === "off") {
+          transitionVoice("WELCOME_SPEECH_STARTED");
+        }
+      } else if (voiceModeStateRef.current === "processing" || voiceModeStateRef.current === "listening") {
+        transitionVoice("ASSISTANT_REPLY_STARTED");
       }
       setMicState("speaking");
       setTtsState("started");
@@ -536,6 +573,11 @@ export function ChatClient({ initialName }: { initialName: string }) {
         autoListenAfterSpeakRef.current = false;
         autoListenQueuedRef.current = true;
         requestStartListening(120);
+      }
+      if (cleanText === welcomeText && voiceModeStateRef.current === "speaking_welcome") {
+        transitionVoice("WELCOME_SPEECH_ENDED");
+      } else if (voiceModeStateRef.current === "speaking_reply") {
+        transitionVoice("ASSISTANT_REPLY_ENDED");
       }
     };
     utterance.onerror = (evt) => {
@@ -554,6 +596,10 @@ export function ChatClient({ initialName }: { initialName: string }) {
           setVoiceBanner("Tap anywhere once to enable voice in this browser.");
         }
         return;
+      }
+      if (voiceModeStateRef.current !== "off") {
+        transitionVoice("VOICE_FAILURE");
+        setVoiceBanner("Voice unavailable, continuing in text");
       }
       if (!ttsRetryRef.current) {
         ttsRetryRef.current = true;
@@ -584,6 +630,11 @@ export function ChatClient({ initialName }: { initialName: string }) {
             autoListenQueuedRef.current = true;
             requestStartListening(120);
           }
+          if (cleanText === welcomeText && voiceModeStateRef.current === "speaking_welcome") {
+            transitionVoice("WELCOME_SPEECH_ENDED");
+          } else if (voiceModeStateRef.current === "speaking_reply") {
+            transitionVoice("ASSISTANT_REPLY_ENDED");
+          }
         };
         fallback.onerror = () => {
           setMicState("idle");
@@ -592,6 +643,10 @@ export function ChatClient({ initialName }: { initialName: string }) {
           if (autoWelcomeAttemptedRef.current && !hasUserInteractedRef.current) {
             setVoiceBanner("Tap anywhere once to enable voice in this browser.");
             return;
+          }
+          if (voiceModeStateRef.current !== "off") {
+            transitionVoice("VOICE_FAILURE");
+            setVoiceBanner("Voice unavailable, continuing in text");
           }
           setVoiceBanner("Text-to-speech failed. You can continue in text mode.");
         };
@@ -622,6 +677,10 @@ export function ChatClient({ initialName }: { initialName: string }) {
     speechStartTimeoutRef.current = window.setTimeout(() => {
       if (ttsStateRef.current !== "started") {
         setTtsState("error");
+        if (voiceModeStateRef.current !== "off") {
+          transitionVoice("VOICE_FAILURE");
+          setVoiceBanner("Voice unavailable, continuing in text");
+        }
         if (opts?.autoListen) {
           autoListenQueuedRef.current = true;
           requestStartListening(100);
@@ -644,6 +703,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
     setMessages((prev) => [...prev, { role: "user", text: msg }]);
     setInput("");
     setIsLoading(true);
+    if (voiceModeStateRef.current === "listening") {
+      transitionVoice("USER_SPEECH_CAPTURED");
+    }
     try {
       const res = await fetch(`${backendBaseUrl}/api/chat`, {
         method: "POST",
@@ -660,7 +722,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
       setTraces(data.traces || []);
       setLastPayload(data.payload || null);
       // Hands-free voice mode: speak every assistant reply, then auto-listen.
-      if (hasUserInteractedRef.current && ttsSupported) {
+      if (voiceModeStateRef.current !== "off" && voiceModeStateRef.current !== "error_fallback" && ttsSupported) {
         speak(voiceTtsText(data), { autoListen: true });
       }
     } catch (e) {
@@ -674,10 +736,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
           text: "I’m having trouble reaching the backend right now. Please try again in a moment.",
         },
       ]);
-      if (hasUserInteractedRef.current && ttsSupported) {
-        speak("I am having trouble reaching the backend right now. Please try again.", {
-          autoListen: true,
-        });
+      if (voiceModeStateRef.current !== "off") {
+        transitionVoice("VOICE_FAILURE");
+        setVoiceBanner("Voice unavailable, continuing in text");
       }
     } finally {
       setIsLoading(false);
@@ -687,7 +748,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
       }
       autoListenWatchdogRef.current = window.setTimeout(() => {
         if (
-          hasUserInteractedRef.current &&
+          voiceModeStateRef.current !== "off" &&
+          voiceModeStateRef.current !== "error_fallback" &&
           sttSupported &&
           !recognitionActiveRef.current &&
           micStateRef.current === "idle"
@@ -716,6 +778,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
       setVoiceBanner("Voice recognizer is not initialized. Please use text.");
       return;
     }
+    if (voiceModeStateRef.current === "speaking_reply" || voiceModeStateRef.current === "speaking_welcome") {
+      return;
+    }
     if (micState === "listening") {
       autoListenQueuedRef.current = false;
       stopListening();
@@ -724,6 +789,44 @@ export function ChatClient({ initialName }: { initialName: string }) {
     }
     autoListenQueuedRef.current = false;
     requestStartListening();
+  }
+
+  function onEnableVoiceMode() {
+    hasUserInteractedRef.current = true;
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem("finn_voice_mode_seen", "1");
+    }
+    setShowVoiceHint(false);
+    transitionVoice("ENABLE_CLICKED");
+    if (!ttsSupported || !sttSupported) {
+      transitionVoice("VOICE_FAILURE");
+      setVoiceBanner("Voice unavailable, continuing in text");
+      return;
+    }
+    autoWelcomeAttemptedRef.current = true;
+    speak(welcomeText, { autoListen: true });
+  }
+
+  function onStopVoiceMode() {
+    transitionVoice("STOP_CLICKED");
+    autoListenQueuedRef.current = false;
+    autoListenAfterSpeakRef.current = false;
+    welcomeSpeechPendingRef.current = false;
+    autoWelcomeAttemptedRef.current = false;
+    welcomeSpokenRef.current = false;
+    if (speechStartTimeoutRef.current !== null) {
+      window.clearTimeout(speechStartTimeoutRef.current);
+      speechStartTimeoutRef.current = null;
+    }
+    if (autoListenWatchdogRef.current !== null) {
+      window.clearTimeout(autoListenWatchdogRef.current);
+      autoListenWatchdogRef.current = null;
+    }
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    stopListening();
+    setMicState("idle");
   }
 
   const processingText = inferProcessingText(input || messages.at(-1)?.text || "");
@@ -813,6 +916,35 @@ export function ChatClient({ initialName }: { initialName: string }) {
           <span>Advisor hours: Mon–Fri, 9:00 AM–6:00 PM IST</span>
         </div>
 
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div>
+            <p className="text-xs font-semibold text-slate-700">Voice Mode</p>
+            {showVoiceHint && voiceModeState === "off" && (
+              <p className="text-xs text-slate-500">Hands-free conversation with Finn. Tap to start.</p>
+            )}
+            {voiceModeHelperText(voiceModeState, voiceProcessingSlow) && (
+              <p className="text-xs text-slate-600">{voiceModeHelperText(voiceModeState, voiceProcessingSlow)}</p>
+            )}
+          </div>
+          {voiceModeState === "off" || voiceModeState === "error_fallback" ? (
+            <button
+              type="button"
+              onClick={onEnableVoiceMode}
+              className="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-800 hover:bg-indigo-100"
+            >
+              Enable Voice Mode
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onStopVoiceMode}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              Stop Voice Mode
+            </button>
+          )}
+        </div>
+
         <div
           ref={chatScrollRef}
           className="h-[420px] space-y-3 overflow-auto rounded-xl border border-slate-100 bg-slate-50 p-3"
@@ -875,16 +1007,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
         {voiceBanner && (
           <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
             {voiceBanner}
+            {debugAgentTrace && ttsErrorDetail ? ` (${ttsErrorDetail})` : ""}
           </p>
         )}
-        {ttsSupported && (
-          <p className="mt-2 text-[11px] text-slate-500">
-            Voice debug: {ttsState}
-            {ttsErrorDetail ? ` (${ttsErrorDetail})` : ""}
-            {` · mic restarts=${voiceRestartAttemptsRef.current}`}
-          </p>
-        )}
-
         <div className="mt-3 flex flex-wrap gap-2">
           {QUICK_TOPICS.map((t) => (
             <button
