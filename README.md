@@ -2,6 +2,16 @@
 
 Capstone project: **Finn** (smart FAQ + review pulse + advisor scheduling) for a Groww-style fintech. Product and engineering specs live in the repo root (`Brain.md`, `PRD.md`, `ARCHITECTURE.md`, etc.).
 
+## Final submission links
+
+- GitHub repository: https://github.com/aviraltasks/investor-ops-intelligence-suite
+- Deployed backend (Render): https://investor-ops-intelligence-suite.onrender.com
+- Deployed application (Vercel): `ADD_YOUR_FINAL_VERCEL_URL_HERE`
+- Evaluation report: [EVAL_REPORT.md](EVAL_REPORT.md)
+- Source manifest (official URLs): [Source manifest section](#source-manifest-31-official--product-urls)
+
+> Replace the Vercel URL placeholder with the exact production URL submitted in the evaluation form.
+
 ## Stack (Phase 1+)
 
 | Area | Technology |
@@ -312,7 +322,8 @@ Authoritative design: [ARCHITECTURE.md](ARCHITECTURE.md). At a glance:
 
 ## Source manifest (31 official / product URLs)
 
-Canonical list in code: `backend/app/sources/manifest.py` (`all_manifest_urls()`). Curated copy for reviewers:
+Canonical list in code: `backend/app/sources/manifest.py` via `all_manifest_urls()`.  
+Curated reviewer copy (same 31 URLs) is listed below.
 
 **Groww mutual fund pages (15)**
 
