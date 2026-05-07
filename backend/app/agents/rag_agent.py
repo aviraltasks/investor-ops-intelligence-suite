@@ -17,6 +17,7 @@ from app.sources.manifest import FUND_SOURCES
 
 _FAQ_ANSWER_CACHE: dict[str, tuple[str, list[str]]] = {}
 _FAQ_CACHE_MAX = 300
+_FUND_NAME_KEYS = tuple((f.display_name or "").lower() for f in FUND_SOURCES)
 
 
 def _query_terms(query: str) -> set[str]:
@@ -63,7 +64,7 @@ def _format_sources(urls: list[str]) -> str:
     if not urls:
         return ""
     # Keep citations concise and relevant for chat + TTS.
-    top = urls[:2]
+    top = urls[:1]
     return "Sources:\n" + "\n".join(f"- {u}" for u in top)
 
 
@@ -96,6 +97,81 @@ def _two_sentences(text: str) -> str:
         return text.strip()
     parts = re.split(r"(?<=[.!?])\s+", t)
     return " ".join(parts[:2]).strip()
+
+
+def _query_has_specific_fund(query: str) -> bool:
+    q = (query or "").lower()
+    if any(name and name in q for name in _FUND_NAME_KEYS):
+        return True
+    # Handle common shorthand mentions for this corpus.
+    shorthand = (
+        "mirae",
+        "hdfc",
+        "sbi",
+        "kotak",
+        "quant",
+        "ppfas",
+        "parag parikh",
+        "nippon",
+        "uti",
+        "axis",
+        "canara",
+        "icici",
+        "motilal",
+    )
+    return any(k in q for k in shorthand)
+
+
+def _is_metric_query(query: str) -> bool:
+    q = (query or "").lower()
+    return any(k in q for k in ("nav", "expense ratio", "exit load"))
+
+
+def _is_concept_query(query: str) -> bool:
+    q = (query or "").lower()
+    concept_markers = (
+        "what is",
+        "how is",
+        "how does",
+        "meaning of",
+        "explain",
+        "calculate",
+    )
+    return any(m in q for m in concept_markers)
+
+
+def _deterministic_metric_clarifier(query: str) -> tuple[str, list[str]] | None:
+    q = (query or "").lower()
+    if not _is_metric_query(q):
+        return None
+    has_fund = _query_has_specific_fund(q)
+    is_concept = _is_concept_query(q)
+    if "nav" in q and is_concept and not has_fund:
+        answer = _two_sentences(
+            "NAV means Net Asset Value, i.e., the per-unit value of a mutual fund based on total assets minus liabilities. "
+            "If you want the current NAV number, tell me the exact fund name."
+        )
+        return answer, ["https://investor.sebi.gov.in/securities-mf-investments.html"]
+    if "expense ratio" in q and is_concept and not has_fund:
+        answer = _two_sentences(
+            "Expense ratio is the annual percentage fee a fund charges to manage your money. "
+            "If you want the exact value, share the fund name and I will fetch it."
+        )
+        return answer, ["https://investor.sebi.gov.in/understanding_mf.html"]
+    if "exit load" in q and is_concept and not has_fund:
+        answer = _two_sentences(
+            "Exit load is a fee charged when units are redeemed within a defined period. "
+            "If you want the exact percentage, share the fund name."
+        )
+        return answer, ["https://investor.sebi.gov.in/exit_load.html"]
+    if not has_fund:
+        metric = "NAV" if "nav" in q else "expense ratio" if "expense ratio" in q else "exit load"
+        answer = _two_sentences(
+            f"I can fetch exact {metric} values, but I need the fund name first. "
+            f"Please share the fund, for example: '{metric} of Mirae Asset ELSS'."
+        )
+        return answer, []
+    return None
 
 
 def _sentences(text: str) -> list[str]:
@@ -339,11 +415,30 @@ def answer_faq(session: Session, query: str) -> AgentResult:
                 outcome="cache_hit",
             )
         )
-        out = _compact(cached_answer, max_len=240)
+        out = _compact(cached_answer, max_len=220)
         src_block = _format_sources(cached_sources)
         if src_block:
             out = f"{out}\n\n{src_block}"
         return AgentResult(response_text=out, payload={"sources": cached_sources[:2], "confidence": "high"}, traces=traces)
+
+    clarifier = _deterministic_metric_clarifier(query)
+    if clarifier:
+        answer_body, clarifier_sources = clarifier
+        _cache_set(query, answer_body, clarifier_sources)
+        traces.append(
+            AgentTraceStep(
+                agent="rag_agent",
+                reasoning_brief="Detected ambiguous metric query and asked clarifying follow-up instead of assuming fund.",
+                tools=["faq.metric_clarifier"],
+                replanned=False,
+                outcome="clarification_prompt",
+            )
+        )
+        out = _compact(answer_body, max_len=220)
+        src_block = _format_sources(clarifier_sources)
+        if src_block:
+            out = f"{out}\n\n{src_block}"
+        return AgentResult(response_text=out, payload={"sources": clarifier_sources[:1], "confidence": "high"}, traces=traces)
 
     deterministic = _deterministic_faq_answer(session, query)
     if deterministic:
@@ -358,11 +453,11 @@ def answer_faq(session: Session, query: str) -> AgentResult:
                 outcome="fast_path_answer",
             )
         )
-        out = _compact(answer_body, max_len=260)
+        out = _compact(answer_body, max_len=220)
         src_block = _format_sources(det_sources)
         if src_block:
             out = f"{out}\n\n{src_block}"
-        return AgentResult(response_text=out, payload={"sources": det_sources[:2], "confidence": "high"}, traces=traces)
+        return AgentResult(response_text=out, payload={"sources": det_sources[:1], "confidence": "high"}, traces=traces)
 
     deterministic_coverage = _deterministic_coverage_answer(query)
     if deterministic_coverage:
@@ -377,11 +472,11 @@ def answer_faq(session: Session, query: str) -> AgentResult:
                 outcome="coverage_fast_path",
             )
         )
-        out = _compact(answer_body, max_len=320)
+        out = _compact(answer_body, max_len=220)
         src_block = _format_sources(det_sources)
         if src_block:
             out = f"{out}\n\n{src_block}"
-        return AgentResult(response_text=out, payload={"sources": det_sources[:2], "confidence": "high"}, traces=traces)
+        return AgentResult(response_text=out, payload={"sources": det_sources[:1], "confidence": "high"}, traces=traces)
 
     if llm_available():
         plan_res = chat_completion_safe(
@@ -518,7 +613,7 @@ def answer_faq(session: Session, query: str) -> AgentResult:
         _cache_set(query, answer_body, used_urls)
         return AgentResult(
             response_text=_compact(answer, max_len=520),
-            payload={"sources": used_urls[:2], "confidence": "medium"},
+            payload={"sources": used_urls[:1], "confidence": "medium"},
             traces=traces,
         )
 
@@ -577,6 +672,6 @@ def answer_faq(session: Session, query: str) -> AgentResult:
     _cache_set(query, response, sources[:2])
     return AgentResult(
         response_text=_compact(response, max_len=520),
-        payload={"sources": sources[:2], "confidence": "medium"},
+        payload={"sources": sources[:1], "confidence": "medium"},
         traces=traces,
     )

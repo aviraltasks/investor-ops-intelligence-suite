@@ -188,3 +188,36 @@ def test_deterministic_funds_covered_answer(monkeypatch, tmp_path) -> None:
         assert "we currently cover" in text.lower()
         assert "mutual funds" in text.lower()
         assert "Sources:" in text
+
+
+def test_ambiguous_nav_query_asks_clarification(monkeypatch, tmp_path) -> None:
+    db_file = tmp_path / "phase14_nav_clarify.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("EMBEDDING_MODEL", "hash")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    reset_settings()
+    reset_engine()
+
+    with TestClient(app) as client:
+        _seed_chunks()
+        out = _post_chat(client, "what is nav and how is it calculated", session_id="p14-nav-clarify")
+        text = out["response"].lower()
+        assert "net asset value" in text
+        assert "tell me the exact fund name" in text
+
+
+def test_metric_without_fund_requests_fund_name(monkeypatch, tmp_path) -> None:
+    db_file = tmp_path / "phase14_metric_clarify.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("EMBEDDING_MODEL", "hash")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    reset_settings()
+    reset_engine()
+
+    with TestClient(app) as client:
+        _seed_chunks()
+        out = _post_chat(client, "what is the expense ratio", session_id="p14-metric-clarify")
+        text = out["response"].lower()
+        assert "share the fund name" in text or "fund name first" in text
