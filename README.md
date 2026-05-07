@@ -6,11 +6,9 @@ Capstone project: **Finn** (smart FAQ + review pulse + advisor scheduling) for a
 
 - GitHub repository: https://github.com/aviraltasks/investor-ops-intelligence-suite
 - Deployed backend (Render): https://investor-ops-intelligence-suite.onrender.com
-- Deployed application (Vercel): `ADD_YOUR_FINAL_VERCEL_URL_HERE`
+- Deployed application (Vercel): https://investor-ops-intelligence-suite.vercel.app
 - Evaluation report: [EVAL_REPORT.md](EVAL_REPORT.md)
 - Source manifest (official URLs): [Source manifest section](#source-manifest-31-official--product-urls)
-
-> Replace the Vercel URL placeholder with the exact production URL submitted in the evaluation form.
 
 ## Stack (Phase 1+)
 
