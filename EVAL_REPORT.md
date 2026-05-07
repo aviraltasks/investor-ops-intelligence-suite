@@ -5,6 +5,15 @@ Scope: End-to-end evaluation against `EVAL_CRITERIA.md` (RAG, safety, tone/struc
 
 ---
 
+## Evaluation Method
+
+- Environment: production backend + deployed frontend, with production corpus already ingested.
+- Evidence sources: automated tests, agent traces, and live prompt checks.
+- Scoring convention: rubric from `EVAL_CRITERIA.md`; scores represent observed behavior at evaluation time.
+- Reviewer note: external LLM quota/rate-limit windows can affect fluency but not core guardrail behavior.
+
+---
+
 ## 1) RAG Evaluation Results
 
 Golden dataset executed against the deployed stack with populated RAG corpus (523 chunks) and trace inspection in chat/admin panels.  
@@ -143,3 +152,11 @@ Current system is **submission-ready** for core requirements:
 - Admin + integration surfaces are functional with explicit live-mode diagnostics.
 
 Quality today is strongest in reliability, safety, and traceability; ongoing UAT focus remains voice UX polish and richer synthesis under external LLM quota pressure.
+
+---
+
+## 8) Immediate Next Improvements (Post-Submission)
+
+1. Expand golden-dataset evaluation with a larger set of comparative and edge-case fund questions.
+2. Add multilingual adversarial safety tests and repeated-coercion stress checks.
+3. Continue voice UX tuning for smoother hands-free behavior across Chrome/Edge variations.
