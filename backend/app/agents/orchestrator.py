@@ -100,6 +100,33 @@ def _is_prompt_injection_attempt(text: str) -> bool:
     )
 
 
+def _compact_reply(text: str, *, max_len: int = 280) -> str:
+    body = (text or "").strip()
+    if not body:
+        return ""
+    parts = body.split("\n\nSources:\n", 1)
+    # Preserve two-line memory reminder style messages as-is for continuity UX.
+    if "Quick reminder:" in parts[0]:
+        pre = parts[0].strip()
+        if len(pre) <= max_len + 120:
+            concise = pre
+        else:
+            concise = pre[: max_len + 120].rstrip()
+        if len(parts) == 2 and parts[1].strip():
+            lines = [ln for ln in parts[1].splitlines() if ln.strip()]
+            if lines:
+                concise += "\n\nSources:\n" + lines[0]
+        return concise
+    main = re.sub(r"\s+", " ", parts[0]).strip()
+    sentences = re.split(r"(?<=[.!?])\s+", main)
+    concise = " ".join(sentences[:2]).strip()[:max_len].rstrip()
+    if len(parts) == 2 and parts[1].strip():
+        lines = [ln for ln in parts[1].splitlines() if ln.strip()]
+        if lines:
+            concise += "\n\nSources:\n" + lines[0]
+    return concise
+
+
 def handle_chat_turn(session: Session, session_id: str, user_name: str, message: str) -> AgentResult:
     traces: list[AgentTraceStep] = []
     payload: dict[str, Any] = {}
@@ -351,5 +378,17 @@ def handle_chat_turn(session: Session, session_id: str, user_name: str, message:
                     outcome="synthesized",
                 )
             )
+
+    # Keep default UX concise for chat/voice while preserving source line if present.
+    final_text = _compact_reply(final_text)
+    payload["debug"] = {
+        "clarification_prompt_count": sum(1 for t in traces if "clarification_prompt" in (t.outcome or "")),
+        "fallback_answer_count": sum(
+            1
+            for t in traces
+            if "fallback" in (t.outcome or "") or "llm_error" in (t.outcome or "")
+        ),
+        "trace_count": len(traces),
+    }
 
     return AgentResult(response_text=final_text, payload=payload, traces=traces)

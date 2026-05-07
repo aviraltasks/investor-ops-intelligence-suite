@@ -36,6 +36,9 @@ type SpeechRecognitionResultLike = { transcript?: string };
 type SpeechRecognitionEventLike = {
   results?: ArrayLike<ArrayLike<SpeechRecognitionResultLike>>;
 };
+type SpeechRecognitionErrorEventLike = {
+  error?: string;
+};
 type SpeechRecognitionLike = {
   lang: string;
   continuous: boolean;
@@ -43,7 +46,7 @@ type SpeechRecognitionLike = {
   maxAlternatives: number;
   onstart: (() => void) | null;
   onresult: ((evt: SpeechRecognitionEventLike) => void) | null;
-  onerror: (() => void) | null;
+  onerror: ((evt: SpeechRecognitionErrorEventLike) => void) | null;
   onend: (() => void) | null;
   start: () => void;
   stop: () => void;
@@ -172,6 +175,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const autoListenQueuedRef = useRef(false);
   const isLoadingRef = useRef(false);
   const micStateRef = useRef<"idle" | "listening" | "processing" | "speaking">("idle");
+  const voiceRestartAttemptsRef = useRef(0);
 
   const backendBaseUrl = useMemo(
     () => process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000",
@@ -205,10 +209,12 @@ export function ChatClient({ initialName }: { initialName: string }) {
 
   function requestStartListening(delayMs = 0) {
     if (!sttSupported || !recognitionRef.current) return;
+    if (typeof document !== "undefined" && document.hidden) return;
     if (isLoadingRef.current || micStateRef.current === "processing" || micStateRef.current === "speaking") return;
     const run = () => {
       if (!recognitionRef.current || recognitionActiveRef.current) return;
       try {
+        voiceRestartAttemptsRef.current += 1;
         setVoiceBanner(null);
         recognitionRef.current.start();
       } catch {
@@ -272,9 +278,14 @@ export function ChatClient({ initialName }: { initialName: string }) {
         setMicState("processing");
         void sendMessage(transcript);
       };
-      recognition.onerror = () => {
+      recognition.onerror = (evt: SpeechRecognitionErrorEventLike) => {
         recognitionActiveRef.current = false;
         setMicState("idle");
+        const code = (evt?.error || "").toLowerCase();
+        if (code === "not-allowed" || code === "service-not-allowed") {
+          setVoiceBanner("Mic permission is blocked. Please allow microphone access in browser settings.");
+          return;
+        }
         setVoiceBanner("Voice input failed. Switched to text mode.");
       };
       recognition.onend = () => {
@@ -350,6 +361,12 @@ export function ChatClient({ initialName }: { initialName: string }) {
         speak(welcomeText, { autoListen: true });
       }, 250);
     }
+    const onVisibilityChange = () => {
+      if (document.hidden) return;
+      if (autoListenQueuedRef.current) {
+        requestStartListening(80);
+      }
+    };
     window.addEventListener("pointerdown", markInteractedAndSpeakWelcome, {
       once: true,
     });
@@ -357,6 +374,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
       once: true,
     });
     window.addEventListener("beforeunload", stopSpeech);
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       try {
         recognitionRef.current?.stop();
@@ -368,6 +386,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
       window.removeEventListener("beforeunload", stopSpeech);
       window.removeEventListener("pointerdown", markInteractedAndSpeakWelcome);
       window.removeEventListener("keydown", markInteractedAndSpeakWelcome);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       if (window.speechSynthesis) {
         window.speechSynthesis.onvoiceschanged = null;
       }
@@ -677,6 +696,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
           <p className="mt-2 text-[11px] text-slate-500">
             Voice debug: {ttsState}
             {ttsErrorDetail ? ` (${ttsErrorDetail})` : ""}
+            {` · mic restarts=${voiceRestartAttemptsRef.current}`}
           </p>
         )}
 
