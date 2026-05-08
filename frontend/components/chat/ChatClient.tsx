@@ -195,27 +195,82 @@ function isLikelyTtsEcho(transcript: string, assistantTexts: string[]): boolean 
   return false;
 }
 
-function pickPreferredVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
-  if (!voices.length) return null;
-  const normalized = voices.map((v) => ({
-    voice: v,
-    lang: (v.lang || "").toLowerCase(),
-    name: (v.name || "").toLowerCase(),
+let finnTtsVoicesLogged = false;
+
+function shouldLogFinnTtsVoices(): boolean {
+  if (typeof window === "undefined") return false;
+  if (process.env.NODE_ENV === "development") return true;
+  try {
+    return new URLSearchParams(window.location.search).get("debugVoices") === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** One-time console listing for Chrome desktop debugging (dev or ?debugVoices=1). */
+function logFinnTtsVoicesOnce(voices: SpeechSynthesisVoice[]): void {
+  if (finnTtsVoicesLogged || !shouldLogFinnTtsVoices()) return;
+  finnTtsVoicesLogged = true;
+  const rows = voices.map((v) => ({
+    name: v.name,
+    lang: v.lang,
+    localService: v.localService,
+    default: v.default,
   }));
-  const femaleHint = /(female|samantha|zira|aria|natasha|heera|veena|alloy|priya|aditi|swara|saanvi)/;
-  const premiumHint = /(neural|natural|wavenet|google|microsoft|enhanced|premium)/;
-  const indiaFemaleHint = /(heera|priya|aditi|swara|veena|saanvi|india|en-in|english \(india\))/;
-  return (
-    normalized.find((v) => v.lang.startsWith("en-in") && indiaFemaleHint.test(v.name) && premiumHint.test(v.name))?.voice ||
-    normalized.find((v) => v.lang.startsWith("en-in") && indiaFemaleHint.test(v.name))?.voice ||
-    normalized.find((v) => v.lang.startsWith("en-in") && femaleHint.test(v.name) && premiumHint.test(v.name))?.voice ||
-    normalized.find((v) => v.lang.startsWith("en-in") && femaleHint.test(v.name))?.voice ||
-    normalized.find((v) => v.lang.startsWith("en") && femaleHint.test(v.name) && premiumHint.test(v.name))?.voice ||
-    normalized.find((v) => v.lang.startsWith("en") && femaleHint.test(v.name))?.voice ||
-    normalized.find((v) => v.lang.startsWith("en-in") && premiumHint.test(v.name))?.voice ||
-    normalized.find((v) => v.lang.startsWith("en"))?.voice ||
-    normalized[0].voice
-  );
+  console.info("[Finn TTS] speechSynthesis.getVoices() —", rows.length, "voices (Chrome/OS list)");
+  console.table(rows);
+}
+
+function isLikelyMaleVoiceLabel(name: string): boolean {
+  const n = name.toLowerCase();
+  return /\b(david|mark|daniel|james|fred|guy|john|brian|george|thomas|richard|paul|christopher)\b/.test(n);
+}
+
+/**
+ * Prefer a natural-sounding female English voice when the OS exposes one.
+ * Returns null so the caller omits utterance.voice → browser default (avoids forcing a bad match).
+ */
+function pickPreferredFemaleEnglishVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
+  if (!voices.length) return null;
+  logFinnTtsVoicesOnce(voices);
+
+  const enFirst = voices.filter((v) => (v.lang || "").toLowerCase().startsWith("en"));
+  const pool = enFirst.length ? enFirst : voices;
+
+  const rankedNamePatterns: RegExp[] = [
+    /google\s+us\s+english[^\n]*female/i,
+    /google\s+uk\s+english[^\n]*female/i,
+    /google\s+[^\n]*english[^\n]*female/i,
+    /female[^\n]*google[^\n]*english/i,
+    /\bzira\b/i,
+    /\bsonia\b/i,
+    /\blibby\b/i,
+    /\bsamantha\b/i,
+    /\bjenny\b/i,
+    /\baria\b.*natural/i,
+    /\bnatasha\b/i,
+    /\bgoogle\s+[^\n]*(neural|wavenet)[^\n]*english/i,
+  ];
+
+  for (const pat of rankedNamePatterns) {
+    const hit = pool.find((v) => {
+      const n = v.name || "";
+      if (isLikelyMaleVoiceLabel(n)) return false;
+      return pat.test(n);
+    });
+    if (hit) return hit;
+  }
+
+  const femaleLoose =
+    /(female|woman|zira|sonia|libby|samantha|jenny|aria|natasha|heera|priya|aditi|veena|saanvi|sara|linda|susan|karen)/i;
+  const looseHit = pool.find((v) => {
+    const n = v.name || "";
+    if (isLikelyMaleVoiceLabel(n)) return false;
+    return femaleLoose.test(n);
+  });
+  if (looseHit) return looseHit;
+
+  return null;
 }
 
 export function ChatClient({ initialName }: { initialName: string }) {
@@ -459,7 +514,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
       if (typeof window === "undefined" || !window.speechSynthesis) return;
       const voices = window.speechSynthesis.getVoices();
       if (!voices.length) return;
-      const ranked = pickPreferredVoice(voices);
+      const ranked = pickPreferredFemaleEnglishVoice(voices);
       preferredVoiceRef.current = ranked ? { name: ranked.name, lang: ranked.lang } : null;
     };
     choosePreferredVoice();
@@ -550,14 +605,18 @@ export function ChatClient({ initialName }: { initialName: string }) {
     }
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(cleanText);
+    const voicesNow = window.speechSynthesis.getVoices();
     const preferred = preferredVoiceRef.current;
-    utterance.lang = preferred?.lang || "en-IN";
     const selectedVoice =
-      window.speechSynthesis
-        .getVoices()
-        .find((v) => preferred && v.name === preferred.name && v.lang === preferred.lang) ||
-      pickPreferredVoice(window.speechSynthesis.getVoices());
-    if (selectedVoice) utterance.voice = selectedVoice;
+      (preferred &&
+        voicesNow.find((v) => v.name === preferred.name && v.lang === preferred.lang)) ||
+      pickPreferredFemaleEnglishVoice(voicesNow);
+    if (selectedVoice) {
+      utterance.voice = selectedVoice;
+      utterance.lang = (selectedVoice.lang || "").trim() || "en-US";
+    } else {
+      utterance.lang = "en-US";
+    }
     utterance.rate = 0.95;
     utterance.pitch = 1.02;
     utterance.volume = 1;
@@ -1072,7 +1131,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
                   ? "border-indigo-300 bg-indigo-50 text-indigo-800"
                   : micState === "speaking"
                     ? "border-purple-300 bg-purple-50 text-purple-800"
-                    : "border-slate-300 bg-white text-slate-700"
+                    : "mic-attention-idle border-slate-300 bg-white text-slate-700"
             }`}
             title="Voice input toggle"
           >
