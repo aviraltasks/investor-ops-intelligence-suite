@@ -60,7 +60,26 @@ def _classify_intents(message: str) -> list[str]:
     if scheduling_focus:
         intents.append("scheduling")
     if not wants_prepare and (
-        _contains_any(m, ["expense ratio", "exit load", "nav", "fund", "elss", "small cap", "large cap"])
+        _contains_any(
+            m,
+            [
+                "expense ratio",
+                "exit load",
+                "nav",
+                "fund",
+                "elss",
+                "small cap",
+                "large cap",
+                "aum",
+                "assets under management",
+                "lock-in",
+                "lock in",
+                "tax benefit",
+                "section 80",
+                "compare ",
+                "versus",
+            ],
+        )
         or expense_ratio_requested(message)
     ):
         intents.append("faq")

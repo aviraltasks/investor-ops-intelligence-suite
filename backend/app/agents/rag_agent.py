@@ -14,15 +14,35 @@ from app.agents.types import AgentResult, AgentTraceStep
 from app.llm.client import chat_completion_safe, llm_available, parse_json_object
 from app.db.models import RagChunk
 from app.rag.embed import get_embedder
-from app.rag.fund_resolve import resolve_manifest_fund
+from app.rag import fund_resolve as fund_resolve_module
+from app.rag.fund_resolve import resolve_manifest_fund, resolve_manifest_funds_ordered
 from app.rag.search import search_chunks
 from app.sources.manifest import FUND_SOURCES
 
 _FAQ_ANSWER_CACHE: dict[str, tuple[str, list[str]]] = {}
 _FAQ_CACHE_MAX = 300
 # Bump when FAQ strings/logic change so stale in-process cache entries are not reused.
-_FAQ_CACHE_PREFIX = "v4:"
+_FAQ_CACHE_PREFIX = "v5:"
 _FUND_NAME_KEYS = tuple((f.display_name or "").lower() for f in FUND_SOURCES)
+
+
+def _query_minus_manifest_names(query: str) -> str:
+    """Lowercase query with manifest scheme titles removed so words like 'Tax' in 'Tax Saver' don't hijack intent."""
+    ql = re.sub(r"\s+", " ", (query or "").lower()).strip()
+    for fund in sorted(FUND_SOURCES, key=lambda f: len(f.display_name), reverse=True):
+        ql = ql.replace(fund.display_name.lower(), " ")
+        d = fund.display_name.lower()
+        for suf in (" fund direct growth", " direct growth", " fund direct plan growth"):
+            if d.endswith(suf):
+                short = d[: -len(suf)].strip()
+                if len(short) >= 10:
+                    ql = ql.replace(short, " ")
+                break
+    for phrases in fund_resolve_module._EXTRA_PHRASES.values():
+        for phrase in phrases:
+            if len(phrase) >= 8:
+                ql = ql.replace(phrase, " ")
+    return re.sub(r"\s+", " ", ql).strip()
 
 
 def expense_ratio_requested(query: str) -> bool:
@@ -155,6 +175,87 @@ def _extract_exit_load_detail(text: str) -> tuple[str, str] | None:
         if "%" in m.group(1):
             return (m.group(1).strip(), "")
         return (f"{m.group(1).strip()}%", "")
+    return None
+
+
+def _aum_requested(query: str) -> bool:
+    ql = (query or "").lower()
+    return bool(re.search(r"\baum\b|assets\s+under\s+management", ql))
+
+
+def _lock_in_requested(query: str) -> bool:
+    return bool(re.search(r"lock[- ]?in|lockin", (query or "").lower()))
+
+
+def _tax_or_elss_education_requested(query: str) -> bool:
+    ql = _query_minus_manifest_names(query)
+    if not any(k in ql for k in ("tax", "80c", "deduction", "benefit", "benefits", "section")):
+        return False
+    raw = (query or "").lower()
+    if "elss" in raw:
+        return True
+    slug, _ = resolve_manifest_fund(query)
+    if slug:
+        fund = next((f for f in FUND_SOURCES if f.slug == slug), None)
+        if fund and fund.category == "ELSS":
+            return True
+    return False
+
+
+def _extract_nav_inr(text: str) -> str | None:
+    """Robust NAV ₹ parse — avoids capturing stray digit fragments (e.g. ₹06 from ₹106)."""
+    if not text:
+        return None
+    patterns = (
+        r"(?:^|\n)[^\n]{0,24}\bnav\b[^\n₹]{0,60}₹\s*([\d,]+(?:\.\d{1,4})?)",
+        r"\b(?:latest|current)\s+nav\b[^\n₹]{0,50}₹\s*([\d,]+(?:\.\d{1,4})?)",
+        r"\bnav\b\s*[:\-]\s*(?:₹\s*)?([\d,]+(?:\.\d{1,4})?)",
+        r"₹\s*([\d,]+(?:\.\d{1,4})?)[^\n]{0,40}\b(?:per\s+unit|nav)\b",
+    )
+    for pat in patterns:
+        m = re.search(pat, text, re.IGNORECASE | re.MULTILINE)
+        if not m:
+            continue
+        raw = m.group(1).replace(",", "").strip()
+        if not re.match(r"^\d+(?:\.\d+)?$", raw):
+            continue
+        try:
+            v = float(raw)
+        except ValueError:
+            continue
+        if v < 0.01 or v > 1_000_000:
+            continue
+        digits = re.sub(r"\D", "", raw.split(".", 1)[0])
+        if len(digits) < 1:
+            continue
+        return raw
+    return None
+
+
+def _extract_aum_cr(text: str) -> str | None:
+    if not text:
+        return None
+    for pat in (
+        r"(?:aum|assets\s+under\s+management)[^.\n]{0,110}?₹\s*([\d,.]+)\s*(cr|crore)\b",
+        r"(?:aum|assets\s+under\s+management)[^.\n]{0,110}?\b([\d,.]+)\s*(cr|crore)\b",
+        r"(?:scheme\s+)?(?:aum|size)[^.\n]{0,80}?₹\s*([\d,.]+)\s*(lac|lakh|cr|crore)\b",
+    ):
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            amt = m.group(1).strip().rstrip(".")
+            unit = m.group(2).lower()
+            return f"₹{amt} {unit}"
+    return None
+
+
+def _extract_lock_in_hint(text: str) -> str | None:
+    if not text:
+        return None
+    m = re.search(r"lock[- ]?in[^.\n]{0,140}", text, re.IGNORECASE)
+    if m:
+        hint = re.sub(r"\s+", " ", m.group(0)).strip()
+        if len(hint) >= 12:
+            return hint
     return None
 
 
@@ -334,6 +435,27 @@ def _chunks_blob_for_fund_slug(session: Session, slug: str | None, *, limit: int
     return "\n".join(str(r) for r in rows if r)
 
 
+def _nav_for_fund_slug(session: Session, slug: str) -> str | None:
+    if not slug:
+        return None
+    blob = _chunks_blob_for_fund_slug(session, slug)
+    if blob:
+        n = _extract_nav_inr(blob)
+        if n:
+            return n
+    sp = slug.replace("-", " ")
+    hits = search_chunks(
+        session,
+        get_embedder(),
+        f"{sp} latest NAV per unit Groww",
+        top_k=10,
+        preferred_fund_slug=slug,
+    )
+    scan = _prefer_slug_hits(hits, slug)
+    merged = "\n".join(str(h.get("content", "")) for h in scan[:12])
+    return _extract_nav_inr(merged) if merged else None
+
+
 def _prefer_slug_hits(hits: list[dict[str, Any]], slug: str | None) -> list[dict[str, Any]]:
     if not slug:
         return hits
@@ -404,6 +526,103 @@ def _deterministic_small_cap_expense_comparison(
     return answer, sources[:3]
 
 
+def _deterministic_elss_tax_answer(query: str) -> tuple[str, list[str]] | None:
+    if not _tax_or_elss_education_requested(query):
+        return None
+    slug, url = resolve_manifest_fund(query)
+    if not slug:
+        return None
+    fund = next((f for f in FUND_SOURCES if f.slug == slug), None)
+    if not fund or fund.category != "ELSS":
+        return None
+    answer = _two_sentences(
+        f"{fund.display_name} is an ELSS tax-saving equity fund: investments can qualify for Section 80C deduction "
+        "up to ₹1.5 lakh per financial year (within overall Section 80C limits). Units have a three-year lock-in from allotment; "
+        "taxation on gains follows equity mutual fund rules when you redeem."
+    )
+    src = [fund.url, "https://investor.sebi.gov.in/securities-mf-investments.html"]
+    return answer, src
+
+
+def _deterministic_aum_answer(session: Session, query: str) -> tuple[str, list[str]] | None:
+    if not _aum_requested(query):
+        return None
+    slug, url = resolve_manifest_fund(query)
+    if not slug:
+        return None
+    blob = _chunks_blob_for_fund_slug(session, slug)
+    text = blob
+    if not text:
+        hits = search_chunks(session, get_embedder(), query, top_k=10, preferred_fund_slug=slug)
+        text = "\n".join(str(h.get("content", "")) for h in hits[:12])
+    aum = _extract_aum_cr(text) if text else None
+    if aum:
+        answer = _two_sentences(
+            f"Assets under management (AUM) found in our indexed sources for this scheme is approximately {aum}."
+        )
+        return answer, [url]
+    answer = _two_sentences(
+        "I could not read a reliable AUM figure from our text index for this scheme. "
+        "Please confirm on the official factsheet linked under Sources."
+    )
+    return answer, [url]
+
+
+def _deterministic_lock_in_answer(session: Session, query: str) -> tuple[str, list[str]] | None:
+    if not _lock_in_requested(query):
+        return None
+    slug, url = resolve_manifest_fund(query)
+    if not slug:
+        return None
+    fund = next((f for f in FUND_SOURCES if f.slug == slug), None)
+    if not fund:
+        return None
+    blob = _chunks_blob_for_fund_slug(session, slug)
+    hint = _extract_lock_in_hint(blob) if blob else None
+    if hint:
+        answer = _two_sentences(f"From indexed sources: {hint}. Verify wording on the official scheme page linked under Sources.")
+        return answer, [url]
+    if fund.category == "ELSS":
+        answer = _two_sentences(
+            f"{fund.display_name} is an ELSS fund: units have a statutory lock-in of three years from allotment "
+            "(Section 80C tax-saving category). Early redemption before three years is generally not permitted except in limited cases per scheme rules."
+        )
+        return answer, [url, "https://investor.sebi.gov.in/exit_load.html"]
+    answer = _two_sentences(
+        f"{fund.display_name} is an open-ended scheme in our catalog (not ELSS). It does not carry ELSS-style multi-year lock-in; "
+        "any exit load or minimum holding is separate from statutory lock-in. Check the scheme document under Sources."
+    )
+    return answer, [url]
+
+
+def _deterministic_named_nav_comparison(session: Session, query: str) -> tuple[str, list[str]] | None:
+    ql = (query or "").lower()
+    if "nav" not in ql:
+        return None
+    funds = resolve_manifest_funds_ordered(query)
+    if len(funds) < 2:
+        return None
+    if not any(k in ql for k in ("compare", "comparison", "vs", "versus", "between", "difference", " and ")):
+        return None
+    rows: list[tuple[str, str, str]] = []
+    sources: list[str] = []
+    for fund in funds[:4]:
+        nav = _nav_for_fund_slug(session, fund.slug)
+        if not nav:
+            continue
+        label = fund.display_name.replace(" Direct Growth", "").strip()
+        rows.append((label, nav, fund.url))
+        if fund.url not in sources:
+            sources.append(fund.url)
+    if len(rows) < 2:
+        return None
+    facts = ", ".join(f"{lab}: ₹{val}" for lab, val, _ in rows)
+    answer = _two_sentences(
+        f"From indexed sources, NAV comparison is {facts}. NAV is per-unit and changes daily; it is not a performance score by itself."
+    )
+    return answer, sources[:3]
+
+
 def _two_sentences(text: str) -> str:
     t = re.sub(r"\s+", " ", (text or "")).strip()
     if not t:
@@ -442,7 +661,13 @@ def _query_has_specific_fund(query: str) -> bool:
 
 def _is_metric_query(query: str) -> bool:
     q = (query or "").lower()
-    return expense_ratio_requested(query) or exit_load_requested(query) or "nav" in q
+    return (
+        expense_ratio_requested(query)
+        or exit_load_requested(query)
+        or "nav" in q
+        or _aum_requested(query)
+        or _lock_in_requested(query)
+    )
 
 
 def _is_concept_query(query: str) -> bool:
@@ -483,6 +708,18 @@ def _deterministic_metric_clarifier(query: str) -> tuple[str, list[str]] | None:
             "If you want the exact value, share the fund name and I will fetch it."
         )
         return answer, ["https://investor.sebi.gov.in/understanding_mf.html"]
+    if _aum_requested(query) and is_concept and not has_fund:
+        answer = _two_sentences(
+            "AUM (assets under management) is the total market value of assets the scheme manages. "
+            "Tell me the fund name if you want the latest figure from our index."
+        )
+        return answer, ["https://investor.sebi.gov.in/securities-mf-investments.html"]
+    if _lock_in_requested(query) and is_concept and not has_fund:
+        answer = _two_sentences(
+            "Lock-in is a period during which units cannot be redeemed; ELSS funds typically have a three-year statutory lock-in. "
+            "Name a specific scheme for scheme-level wording from our sources."
+        )
+        return answer, ["https://investor.sebi.gov.in/exit_load.html"]
     if exit_load_requested(query) and is_concept and not has_fund:
         answer = _two_sentences(
             "Exit load is a fee charged when units are redeemed within a defined period. "
@@ -657,14 +894,12 @@ def _deterministic_comparison_answer(query: str, hits: list[dict[str, Any]]) -> 
         return None
 
     metric = ""
-    metric_re: re.Pattern[str] | None = None
     suffix = ""
     if expense_ratio_requested(query):
         metric = "expense_ratio"
         suffix = "%"
     elif "nav" in q:
         metric = "nav"
-        metric_re = re.compile(r"\bnav\b[^0-9₹]{0,30}(?:₹\s*)?([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
         suffix = ""
     else:
         return None
@@ -675,15 +910,19 @@ def _deterministic_comparison_answer(query: str, hits: list[dict[str, Any]]) -> 
         text = str(h.get("content", ""))
         if metric == "expense_ratio":
             m = _extract_expense_ratio_pct_match(text)
+            if not m:
+                continue
+            val = m.group(1)
+        elif metric == "nav":
+            val = _extract_nav_inr(text)
+            if not val:
+                continue
         else:
-            m = metric_re.search(text) if metric_re else None
-        if not m:
             continue
         label = _fund_label(h)
         if label.lower() in seen_labels:
             continue
         seen_labels.add(label.lower())
-        val = m.group(1)
         src = str(h.get("source_url", "")).strip()
         found.append((label, val, src))
         if len(found) >= 3:
@@ -710,11 +949,29 @@ def _deterministic_faq_answer(session: Session, query: str) -> tuple[str, list[s
     LLM-light fast path: answer core FAQ intents with deterministic extraction.
     Returns (answer, sources) when confident, else None.
     """
+    tax_ans = _deterministic_elss_tax_answer(query)
+    if tax_ans:
+        return tax_ans
+    if _aum_requested(query):
+        aum_ans = _deterministic_aum_answer(session, query)
+        if aum_ans:
+            return aum_ans
+    if _lock_in_requested(query):
+        lock_ans = _deterministic_lock_in_answer(session, query)
+        if lock_ans:
+            return lock_ans
+    nav_cmp = _deterministic_named_nav_comparison(session, query)
+    if nav_cmp:
+        return nav_cmp
+
     q = query.lower()
     if not (
         exit_load_requested(query)
         or expense_ratio_requested(query)
         or "nav" in q
+        or _aum_requested(query)
+        or _lock_in_requested(query)
+        or _tax_or_elss_education_requested(query)
         or any(k in q for k in ["compare", "vs", "versus", "difference", "between"])
     ):
         return None
@@ -796,12 +1053,21 @@ def _deterministic_faq_answer(session: Session, query: str) -> tuple[str, list[s
     elif "nav" in q:
         for h in hits:
             text = str(h.get("content", ""))
-            # Typical patterns: "NAV: 123.45" or "NAV is ₹123.45"
-            m = re.search(r"\bnav\b[^0-9₹]{0,30}(?:₹\s*)?([0-9]+(?:\.[0-9]+)?)", text, re.IGNORECASE)
-            if m:
-                nav = m.group(1)
+            nav = _extract_nav_inr(text)
+            if nav:
                 answer = _two_sentences(f"The latest NAV found in our indexed sources is ₹{nav}.")
                 return answer, _collect_sources([h] + hits)
+        joined_nav = "\n".join(str(h.get("content", "")) for h in hits[:10])
+        jn = _extract_nav_inr(joined_nav)
+        if jn:
+            answer = _two_sentences(f"The latest NAV found in our indexed sources is ₹{jn}.")
+            return answer, _collect_sources(hits)
+        if _slug:
+            wide_nav = _chunks_blob_for_fund_slug(session, _slug)
+            jw = _extract_nav_inr(wide_nav) if wide_nav else None
+            if jw:
+                answer = _two_sentences(f"The latest NAV found in our indexed sources is ₹{jw}.")
+                return answer, _collect_sources(hits)
 
     # Concept fallback: short extracted bullets when exact value not parsable.
     snippets = _extract_snippets(query, hits, limit=2)
@@ -812,10 +1078,17 @@ def _deterministic_faq_answer(session: Session, query: str) -> tuple[str, list[s
             snippets = []
         elif fee_m == "exit_load" and not _extract_exit_load_detail(merged_snip):
             snippets = []
+        elif _aum_requested(query) and not _extract_aum_cr(merged_snip):
+            snippets = []
     if snippets:
         answer = _two_sentences(" ".join(_compact(s, max_len=120) for s in snippets))
         return answer, _collect_sources(hits)
-    if fee_pri == "expense_ratio" or fee_pri == "exit_load":
+    if fee_pri in ("expense_ratio", "exit_load"):
+        return (
+            _extraction_failure_message(query, _fund_url),
+            _collect_sources(hits),
+        )
+    if "nav" in q and _slug and not fee_pri:
         return (
             _extraction_failure_message(query, _fund_url),
             _collect_sources(hits),
@@ -851,7 +1124,13 @@ def _deterministic_fund_only_prompt(query: str) -> tuple[str, list[str]] | None:
     if not q or len(q.split()) > 8:
         return None
     has_fund = _query_has_specific_fund(q)
-    has_metric = any(k in q for k in ("nav", "aum")) or expense_ratio_requested(query) or exit_load_requested(query)
+    has_metric = (
+        any(k in q for k in ("nav", "aum"))
+        or expense_ratio_requested(query)
+        or exit_load_requested(query)
+        or _aum_requested(query)
+        or _lock_in_requested(query)
+    )
     if not has_fund or has_metric:
         return None
     answer = _two_sentences(

@@ -47,7 +47,76 @@ _EXTRA_PHRASES: dict[str, tuple[str, ...]] = {
         "parag parikh long term",
         "ppfas flexi",
     ),
+    "hdfc-equity-fund-direct-growth": ("hdfc flexi cap",),
+    "nippon-india-large-cap-fund-direct-growth": ("nippon india large cap",),
+    "kotak-midcap-fund-direct-growth": ("kotak small cap",),
+    "quant-small-cap-fund-direct-plan-growth": ("quant small cap",),
+    "canara-robeco-large-cap-fund-direct-growth": ("canara robeco large cap", "canara robeco bluechip"),
+    "icici-prudential-long-term-equity-fund-tax-saving-direct-growth": (
+        "icici prudential elss",
+        "icici elss",
+    ),
 }
+
+
+def resolve_manifest_funds_ordered(query: str) -> list[FundSource]:
+    """
+    Detect every manifest fund mentioned in user text, left-to-right, without overlapping spans.
+
+    Used for comparisons like “NAV of Kotak Small Cap and Quant Small Cap”.
+    """
+    ql = re.sub(r"\s+", " ", (query or "").lower()).strip()
+    if not ql:
+        return []
+
+    spans: list[tuple[int, int, FundSource]] = []
+
+    def add_span(start: int, end: int, fund: FundSource) -> None:
+        if end > start:
+            spans.append((start, end, fund))
+
+    for fund in FUND_SOURCES:
+        phrases: list[str] = []
+        dn = fund.display_name.lower()
+        phrases.append(dn)
+        short = _display_short(fund.display_name)
+        if len(short) >= 8:
+            phrases.append(short)
+        spaced = fund.slug.replace("-", " ")
+        if len(spaced) >= 14:
+            phrases.append(spaced)
+        for extra in _EXTRA_PHRASES.get(fund.slug, ()):
+            phrases.append(extra)
+        seen_p: set[str] = set()
+        for p in phrases:
+            pl = p.strip().lower()
+            if len(pl) < 6 or pl in seen_p:
+                continue
+            seen_p.add(pl)
+            start = 0
+            while True:
+                i = ql.find(pl, start)
+                if i < 0:
+                    break
+                add_span(i, i + len(pl), fund)
+                start = i + 1
+
+    spans.sort(key=lambda x: (x[0], -(x[1] - x[0])))
+    used: list[tuple[int, int]] = []
+    ordered: list[FundSource] = []
+    seen_slug: set[str] = set()
+
+    for s, e, fund in spans:
+        if fund.slug in seen_slug:
+            continue
+        overlap = any(not (e <= u[0] or s >= u[1]) for u in used)
+        if overlap:
+            continue
+        used.append((s, e))
+        seen_slug.add(fund.slug)
+        ordered.append(fund)
+
+    return ordered
 
 
 def resolve_manifest_fund(query: str) -> tuple[str | None, str | None]:
