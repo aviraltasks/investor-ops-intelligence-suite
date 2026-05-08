@@ -17,7 +17,7 @@ from app.agents.memory_agent import (
     load_context,
     save_fact,
 )
-from app.agents.rag_agent import answer_faq
+from app.agents.rag_agent import answer_faq, expense_ratio_requested
 from app.agents.review_intel_agent import get_trending_context
 from app.agents.scheduling_agent import (
     booking_context_prefix_for_topic,
@@ -59,7 +59,10 @@ def _classify_intents(message: str) -> list[str]:
         intents.append("memory_recall")
     if scheduling_focus:
         intents.append("scheduling")
-    if not wants_prepare and _contains_any(m, ["expense ratio", "exit load", "nav", "fund", "elss", "small cap", "large cap"]):
+    if not wants_prepare and (
+        _contains_any(m, ["expense ratio", "exit load", "nav", "fund", "elss", "small cap", "large cap"])
+        or expense_ratio_requested(message)
+    ):
         intents.append("faq")
     if message_suggests_support_faq(message, scheduling_focus=scheduling_focus):
         intents.append("faq")
