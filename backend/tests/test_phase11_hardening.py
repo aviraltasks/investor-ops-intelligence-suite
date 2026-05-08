@@ -119,6 +119,32 @@ def test_change_slot_while_booking_preview(monkeypatch, tmp_path) -> None:
         assert "confirm" in low
 
 
+def test_booking_clarify_correction_prefers_latest_slot(monkeypatch, tmp_path) -> None:
+    """After invalid early-hour reply, later valid correction should win in parser."""
+    db_file = tmp_path / "phase11_slot_correction.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("EMBEDDING_MODEL", "hash")
+    reset_settings()
+    reset_engine()
+
+    with TestClient(app) as client:
+        sid = "slot-correct-1"
+        s1 = _chat(client, "Book an appointment for KYC tomorrow at 10 am", session_id=sid)
+        assert s1["payload"].get("status") == "awaiting_confirmation"
+
+        s2 = _chat(client, "I think 7:00 AM", session_id=sid)
+        low2 = s2["response"].lower()
+        assert "outside advisor hours" in low2 or "only book weekdays" in low2
+        assert s2["payload"].get("status") == "needs_time_clarification"
+
+        s3 = _chat(client, "5:00 PM Monday", session_id=sid)
+        low3 = s3["response"].lower()
+        assert s3["payload"].get("status") == "awaiting_confirmation"
+        assert "outside advisor hours" not in low3
+        assert "confirm booking" in low3
+        assert "17:00 ist" in low3 or "5:00 pm" in low3
+
+
 def test_empty_and_emoji_input_handling(monkeypatch, tmp_path) -> None:
     db_file = tmp_path / "phase11_input.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")

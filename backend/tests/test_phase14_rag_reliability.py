@@ -172,6 +172,28 @@ def test_deterministic_expense_ratio_comparison(monkeypatch, tmp_path) -> None:
         assert "Sources:" in text
 
 
+def test_database_wide_small_cap_comparison_does_not_ask_fund_name(monkeypatch, tmp_path) -> None:
+    db_file = tmp_path / "phase14_compare_database_wide.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("EMBEDDING_MODEL", "hash")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    reset_settings()
+    reset_engine()
+
+    with TestClient(app) as client:
+        _seed_chunks()
+        out = _post_chat(
+            client,
+            "Compare expense ratios of small cap funds in your database",
+            session_id="p14-compare-db-wide",
+        )
+        text = out["response"].lower()
+        assert "need the fund name first" not in text
+        assert "expense ratio comparison" in text
+        assert "0.72%" in out["response"] and "0.89%" in out["response"] and "0.64%" in out["response"]
+
+
 def test_deterministic_funds_covered_answer(monkeypatch, tmp_path) -> None:
     db_file = tmp_path / "phase14_covered.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")

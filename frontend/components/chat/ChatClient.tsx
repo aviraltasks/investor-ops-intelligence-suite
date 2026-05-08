@@ -206,6 +206,14 @@ function isVoiceSpeakingState(state: VoiceModeState): boolean {
   return state === "speaking_welcome" || state === "speaking_reply";
 }
 
+function isTtsInFlight(ttsState: TtsState): boolean {
+  const queuedOrStarted = ttsState === "queued" || ttsState === "started";
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+    return queuedOrStarted;
+  }
+  return queuedOrStarted || window.speechSynthesis.speaking || window.speechSynthesis.pending;
+}
+
 function normalizeForEcho(text: string): string {
   return (text || "")
     .toLowerCase()
@@ -363,9 +371,11 @@ export function ChatClient({ initialName }: { initialName: string }) {
   function requestStartListening(delayMs = 0) {
     if (!sttSupported || !recognitionRef.current) return;
     if (typeof document !== "undefined" && document.hidden) return;
+    if (isTtsInFlight(ttsStateRef.current)) return;
     if (isLoadingRef.current || micStateRef.current === "processing" || micStateRef.current === "speaking") return;
     const run = () => {
       if (!recognitionRef.current || recognitionActiveRef.current) return;
+      if (isTtsInFlight(ttsStateRef.current)) return;
       try {
         voiceRestartAttemptsRef.current += 1;
         setVoiceBanner(null);
@@ -559,10 +569,13 @@ export function ChatClient({ initialName }: { initialName: string }) {
 
   function speak(text: string, opts?: { autoListen?: boolean }) {
     if (!ttsSupported || typeof window === "undefined") return;
+    const cleanText = (text || "").replace(/\s+/g, " ").trim();
+    if (!cleanText) return;
     ttsRetryRef.current = false;
     autoListenAfterSpeakRef.current = Boolean(opts?.autoListen);
     setTtsErrorDetail(null);
     setTtsState("queued");
+    setMicState("speaking");
     autoListenQueuedRef.current = false;
     try {
       window.speechSynthesis.resume();
@@ -573,8 +586,6 @@ export function ChatClient({ initialName }: { initialName: string }) {
       stopListening();
     }
     window.speechSynthesis.cancel();
-    const cleanText = (text || "").replace(/\s+/g, " ").trim();
-    if (!cleanText) return;
     const utterance = new SpeechSynthesisUtterance(cleanText);
     const preferred = preferredVoiceRef.current;
     utterance.lang = preferred?.lang || "en-IN";
@@ -791,7 +802,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
           isVoiceActive(voiceModeStateRef.current) &&
           sttSupported &&
           !recognitionActiveRef.current &&
-          micStateRef.current === "idle"
+          micStateRef.current === "idle" &&
+          !isTtsInFlight(ttsStateRef.current)
         ) {
           requestStartListening(0);
         }

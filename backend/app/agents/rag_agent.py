@@ -8,7 +8,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.agents.topic_routing import looks_like_topic_help_query
+from app.agents.topic_routing import looks_like_topic_help_query, match_quick_topic_chip_label
 from app.agents.types import AgentResult, AgentTraceStep
 from app.llm.client import chat_completion_safe, llm_available, parse_json_object
 from app.db.models import RagChunk
@@ -153,6 +153,13 @@ def _is_concept_query(query: str) -> bool:
 def _deterministic_metric_clarifier(query: str) -> tuple[str, list[str]] | None:
     q = (query or "").lower()
     if not _is_metric_query(q):
+        return None
+    is_comparison_shape = any(k in q for k in ("compare", "vs", "versus", "between", "difference"))
+    is_category_basket = (
+        "funds" in q
+        and any(k in q for k in ("small cap", "large cap", "mid cap", "database", "in your database"))
+    )
+    if is_comparison_shape or is_category_basket:
         return None
     has_fund = _query_has_specific_fund(q)
     is_concept = _is_concept_query(q)
@@ -414,7 +421,8 @@ def _deterministic_domain_clarifier(query: str) -> tuple[str, list[str]] | None:
     q = (query or "").strip().lower()
     if not q:
         return None
-    if not looks_like_topic_help_query(query):
+    chip_label = match_quick_topic_chip_label(query)
+    if not looks_like_topic_help_query(query) and not chip_label:
         return None
     if "kyc" in q or "onboarding" in q:
         return (

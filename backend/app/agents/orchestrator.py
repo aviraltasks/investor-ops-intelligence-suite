@@ -320,11 +320,13 @@ def handle_chat_turn(session: Session, session_id: str, user_name: str, message:
     ):
         rt = str(clarify_snapshot.get("rolling_text") or "").strip()
         if rt:
-            sanitized_message = f"{rt} {sanitized_message}".strip()
+            # Keep newest slot phrase first so parser prioritizes latest user correction
+            # (e.g., old "7:00 AM" + new "5:00 PM Monday" should honor 5:00 PM Monday).
+            sanitized_message = f"{sanitized_message} {rt}".strip()
             traces.append(
                 AgentTraceStep(
                     agent="orchestrator",
-                    reasoning_brief="Merged time/date follow-up with prior booking utterance so scheduling agent can parse slot.",
+                    reasoning_brief="Merged slot follow-up with prior booking utterance while prioritizing latest user time/date correction.",
                     tools=["scheduling.clarify_merge"],
                     outcome="scheduling_context_merge",
                 )
@@ -548,20 +550,17 @@ def handle_chat_turn(session: Session, session_id: str, user_name: str, message:
             if mem_ctx.get("is_returning_user") and mem_ctx.get("recent_topics"):
                 memory_prefix = f"Welcome back {user_name or 'there'}! Last time we discussed {mem_ctx['recent_topics'][0]}. "
             mlow = sanitized_message.lower()
-            show_pulse_teaser = bool(top) and (
-                _is_brief_greeting(sanitized_message)
-                or _contains_any(
-                    mlow,
-                    [
-                        "trend",
-                        "trending",
-                        "pulse",
-                        "review theme",
-                        "what are people",
-                        "customers saying",
-                        "customers are saying",
-                    ],
-                )
+            show_pulse_teaser = bool(top) and _contains_any(
+                mlow,
+                [
+                    "trend",
+                    "trending",
+                    "pulse",
+                    "review theme",
+                    "what are people",
+                    "customers saying",
+                    "customers are saying",
+                ],
             )
             if show_pulse_teaser and top:
                 responses.append(
