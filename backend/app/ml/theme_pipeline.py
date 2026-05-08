@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
+import logging
 import math
 import re
 from typing import Any
@@ -43,6 +44,89 @@ STOPWORDS = {
     "from",
     "my",
     "your",
+    "you",
+    "they",
+    "them",
+    "their",
+    "theirs",
+    "we",
+    "our",
+    "ours",
+    "he",
+    "she",
+    "his",
+    "her",
+    "hers",
+    "its",
+    "me",
+    "mine",
+    "myself",
+    "yourself",
+    "themselves",
+    "ourselves",
+    "himself",
+    "herself",
+    "not",
+    "no",
+    "yes",
+    "will",
+    "would",
+    "could",
+    "should",
+    "can",
+    "did",
+    "does",
+    "do",
+    "done",
+    "have",
+    "has",
+    "had",
+    "being",
+    "been",
+    "am",
+    "be",
+    "these",
+    "those",
+    "very",
+    "much",
+    "also",
+    "just",
+    "like",
+    "really",
+    "even",
+    "still",
+    "best",
+    "good",
+    "bad",
+    "please",
+    "thanks",
+    "thank",
+    "nahi",
+    "nahin",
+    "bahut",
+    "accha",
+    "acha",
+    "achha",
+    "bekar",
+    "bekaar",
+    "kya",
+    "hai",
+    "ka",
+    "ki",
+    "ke",
+    "ho",
+    "hota",
+    "hoti",
+    "kar",
+    "kara",
+    "karo",
+    "kr",
+    "krna",
+    "krne",
+    "wala",
+    "wali",
+    "waale",
+    "waali",
 }
 
 TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9\-]{2,}")
@@ -86,6 +170,11 @@ MAX_SYMBOL_RATIO = 0.5
 MIN_THEME_REVIEWS = 5
 MIN_THEME_KEYWORDS = 2
 MAX_REPEAT_PER_NORMALIZED_REVIEW = 3
+LLM_CLUSTER_LABEL_PROMPT = (
+    'Return JSON only: {"label":"2-6 word neutral product theme for these app reviews"}. '
+    "No PII or person names."
+)
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -354,32 +443,52 @@ def _deterministic_token_baseline_labels(texts: list[str]) -> list[str]:
 def _llm_cluster_short_label(cluster_texts: list[str]) -> str | None:
     """Optional LLM theme title for a cluster (Groq/Gemini when configured)."""
     if not llm_available() or not cluster_texts:
+        logger.warning("Pulse LLM labeling skipped: unavailable_or_empty_cluster")
         return None
-    sample = "\n---\n".join(t[:400] for t in cluster_texts[:6])
-    res = chat_completion_safe(
-        [
-            {
-                "role": "system",
-                "content": (
-                    'Return JSON only: {"label":"2-6 word neutral product theme for these app reviews"}. '
-                    "No PII or person names."
-                ),
-            },
-            {"role": "user", "content": sample[:4000]},
-        ],
-        temperature=0.2,
-    )
+    messages = _build_llm_cluster_label_messages(cluster_texts)
+    res = chat_completion_safe(messages, temperature=0.2)
     if res.provider == "none" or not res.text.strip():
+        logger.warning("Pulse LLM labeling failed: provider=%s error=%s", res.provider, res.error)
         return None
-    obj = parse_json_object(res.text)
-    if not isinstance(obj, dict):
+    label = _parse_llm_cluster_label(res.text)
+    if not label:
+        snippet = re.sub(r"\s+", " ", res.text).strip()[:240]
+        logger.warning(
+            "Pulse LLM labeling parse failure: provider=%s error=%s response_snippet=%s",
+            res.provider,
+            res.error,
+            snippet,
+        )
         return None
-    lab = obj.get("label")
-    if isinstance(lab, str):
-        s = lab.strip()
-        if 3 <= len(s) <= 120:
-            return s
-    return None
+    return label
+
+
+def _build_llm_cluster_label_messages(cluster_texts: list[str]) -> list[dict[str, str]]:
+    sample = "\n---\n".join(t[:400] for t in cluster_texts[:6])
+    return [
+        {"role": "system", "content": LLM_CLUSTER_LABEL_PROMPT},
+        {"role": "user", "content": sample[:4000]},
+    ]
+
+
+def _parse_llm_cluster_label(raw_text: str) -> str | None:
+    obj = parse_json_object(raw_text)
+    if isinstance(obj, dict):
+        lab = obj.get("label")
+        if isinstance(lab, str):
+            s = re.sub(r"\s+", " ", lab).strip().strip(" .,:;\"'")
+            if 3 <= len(s) <= 120:
+                return s
+    # Fallback: accept plain-text short title if model ignored JSON format.
+    one = re.sub(r"\s+", " ", (raw_text or "")).strip().strip("`")
+    if not one:
+        return None
+    if one.startswith("{") and one.endswith("}"):
+        return None
+    if len(one) <= 120:
+        return one
+    first = one.split(".", 1)[0].strip()
+    return first if 3 <= len(first) <= 120 else None
 
 
 def generate_pulse(session: Session, sample_size: int = 500) -> dict[str, Any]:

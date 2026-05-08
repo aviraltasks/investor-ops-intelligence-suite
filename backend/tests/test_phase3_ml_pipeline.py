@@ -7,7 +7,13 @@ from sqlalchemy import func, select
 from app.config import reset_settings
 from app.db.models import PulseRun, PulseTheme, Review
 from app.db.session import get_session_factory, init_db, reset_engine
-from app.ml.theme_pipeline import generate_pulse, get_latest_pulse, list_pulse_history
+from app.ml.theme_pipeline import (
+    _build_llm_cluster_label_messages,
+    _parse_llm_cluster_label,
+    generate_pulse,
+    get_latest_pulse,
+    list_pulse_history,
+)
 
 
 def _seed_reviews(session) -> None:
@@ -170,3 +176,22 @@ def test_generate_pulse_fails_when_only_noise(monkeypatch, tmp_path) -> None:
             raise AssertionError("expected ValueError for unusable reviews")
         except ValueError as exc:
             assert "No usable reviews" in str(exc)
+
+
+def test_llm_cluster_prompt_shape() -> None:
+    msgs = _build_llm_cluster_label_messages(
+        [
+            "App crashes during order placement and customer support is slow.",
+            "Order failed with timeout and retry flow is confusing.",
+        ]
+    )
+    assert len(msgs) == 2
+    assert msgs[0]["role"] == "system"
+    assert "Return JSON only" in msgs[0]["content"]
+    assert msgs[1]["role"] == "user"
+    assert "App crashes during order placement" in msgs[1]["content"]
+
+
+def test_parse_llm_cluster_label_json_and_plain_text() -> None:
+    assert _parse_llm_cluster_label('{"label":"Order Placement Failures"}') == "Order Placement Failures"
+    assert _parse_llm_cluster_label("Order Placement Failures") == "Order Placement Failures"
