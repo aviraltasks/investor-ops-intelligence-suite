@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from fastapi.testclient import TestClient
 
 from app.agents import rag_agent
 from app.config import reset_settings
-from app.db.session import reset_engine
+from app.db.models import PulseRun, PulseTheme
+from app.db.session import get_session_factory, init_db, reset_engine
 from app.main import app
 
 
@@ -126,6 +129,51 @@ def test_subscribers_and_pulse_send(monkeypatch, tmp_path) -> None:
         assert sent.status_code == 200
         assert sent.json()["ok"] is True
         assert sent.json()["sent_count"] == 1
+
+
+def test_admin_review_themes_reflect_latest_pulse_only(monkeypatch, tmp_path) -> None:
+    db_file = tmp_path / "phase8_pulse_theme_latest.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("EMBEDDING_MODEL", "hash")
+    reset_settings()
+    reset_engine()
+    init_db()
+
+    now = datetime.utcnow()
+    with TestClient(app) as client:
+        SessionLocal = get_session_factory()
+        with SessionLocal() as session:
+            older = PulseRun(mode="ml", review_count=100, generated_at=now - timedelta(hours=3), analysis="")
+            session.add(older)
+            session.flush()
+            session.add_all(
+                [
+                    PulseTheme(pulse_run_id=older.id, rank=1, label="Chart & After", volume=999, quote=""),
+                    PulseTheme(pulse_run_id=older.id, rank=2, label="Money & Time", volume=888, quote=""),
+                ]
+            )
+            newer = PulseRun(mode="ml", review_count=60, generated_at=now - timedelta(hours=1), analysis="")
+            session.add(newer)
+            session.flush()
+            session.add_all(
+                [
+                    PulseTheme(pulse_run_id=newer.id, rank=1, label="Trading platform user feedback", volume=50, quote=""),
+                    PulseTheme(pulse_run_id=newer.id, rank=2, label="Clean Theme B", volume=30, quote=""),
+                    PulseTheme(pulse_run_id=newer.id, rank=3, label="Clean Theme C", volume=20, quote=""),
+                ]
+            )
+            session.commit()
+
+        analytics = client.get("/api/admin/analytics?range=week")
+        assert analytics.status_code == 200
+        themes = {x["theme"]: x["volume"] for x in analytics.json()["review_themes"]}
+        assert "Chart & After" not in themes
+        assert "Money & Time" not in themes
+        assert themes == {
+            "Trading platform user feedback": 50,
+            "Clean Theme B": 30,
+            "Clean Theme C": 20,
+        }
 
 
 def test_admin_faq_topics_skip_bot_echo_inputs(monkeypatch, tmp_path) -> None:

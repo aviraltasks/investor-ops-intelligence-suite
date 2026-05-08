@@ -107,15 +107,25 @@ def _analytics_since_utc(range_key: str) -> datetime:
 
 def _admin_analytics_payload(session: Session, range_key: str) -> dict[str, Any]:
     since = _analytics_since_utc(range_key)
-    review_themes = [
-        {"theme": row[0], "volume": int(row[1] or 0)}
-        for row in session.execute(
-            select(PulseTheme.label, func.sum(PulseTheme.volume))
-            .join(PulseRun, PulseTheme.pulse_run_id == PulseRun.id)
-            .where(PulseRun.generated_at >= since)
-            .group_by(PulseTheme.label)
-        ).all()
-    ]
+    # Themes: show only the latest pulse in the selected window so historical labels
+    # from older runs do not accumulate into misleading aggregates.
+    latest_pulse_id = session.scalar(
+        select(PulseRun.id)
+        .where(PulseRun.generated_at >= since)
+        .order_by(desc(PulseRun.generated_at), desc(PulseRun.id))
+        .limit(1)
+    )
+    if latest_pulse_id is None:
+        review_themes: list[dict[str, Any]] = []
+    else:
+        review_themes = [
+            {"theme": row[0], "volume": int(row[1] or 0)}
+            for row in session.execute(
+                select(PulseTheme.label, PulseTheme.volume)
+                .where(PulseTheme.pulse_run_id == latest_pulse_id)
+                .order_by(PulseTheme.rank)
+            ).all()
+        ]
     appointments = [
         {"date": row[0], "count": int(row[1] or 0)}
         for row in session.execute(

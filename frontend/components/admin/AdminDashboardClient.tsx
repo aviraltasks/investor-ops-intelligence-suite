@@ -429,7 +429,11 @@ export function AdminDashboardClient() {
               </div>
             </div>
             <div className="grid gap-4 md:grid-cols-2">
-            {card("Play Store Review Themes", reviewThemeChart.points, reviewThemeChart.total)}
+            {card(
+              "Play Store Review Themes · latest pulse in range",
+              reviewThemeChart.points,
+              reviewThemeChart.total,
+            )}
             {card("Appointments Booked", appointmentsChart.points, appointmentsChart.total)}
             {card("Chat Booking Topics", bookingTopicsChart.points, bookingTopicsChart.total)}
             {card("FAQ Question Topics", faqTopicsChart.points, faqTopicsChart.total)}
