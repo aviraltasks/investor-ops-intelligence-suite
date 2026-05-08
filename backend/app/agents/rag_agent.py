@@ -6,6 +6,7 @@ import json
 import re
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agents.topic_routing import looks_like_topic_help_query, match_quick_topic_chip_label
@@ -20,7 +21,7 @@ from app.sources.manifest import FUND_SOURCES
 _FAQ_ANSWER_CACHE: dict[str, tuple[str, list[str]]] = {}
 _FAQ_CACHE_MAX = 300
 # Bump when FAQ strings/logic change so stale in-process cache entries are not reused.
-_FAQ_CACHE_PREFIX = "v3:"
+_FAQ_CACHE_PREFIX = "v4:"
 _FUND_NAME_KEYS = tuple((f.display_name or "").lower() for f in FUND_SOURCES)
 
 
@@ -59,8 +60,29 @@ def _primary_fee_metric(query: str) -> str | None:
     return None
 
 
+def _looks_like_returns_leaderboard_sentence(sentence: str) -> bool:
+    """Groww comparison tables: multiple schemes with +X.XX% returns and no fee vocabulary."""
+    low = sentence.lower()
+    if re.search(r"expense\s+ratio|\bter\b|total\s+expense|annual\s+recurring", low):
+        return False
+    plus_hits = len(re.findall(r"\+\s*\d+(?:\.\d+)?\s*%", sentence))
+    fundish = len(re.findall(r"\bfund\s+(?:direct\s+)?growth\b|\bfund\s+direct\b", low))
+    if plus_hits >= 2 or (plus_hits >= 1 and fundish >= 2):
+        return True
+    return False
+
+
 def _snippet_score_expense_ratio(sentence: str) -> float:
     low = sentence.lower()
+    # Reject return-leaderboard rows that only contain % performance figures.
+    if _looks_like_returns_leaderboard_sentence(sentence):
+        return -50.0
+    has_fee_vocab = bool(
+        re.search(
+            r"expense\s+ratio|total\s+expense\s+ratio|annual\s+recurring|management\s+fee|\bter\b|cost\s+ratio",
+            low,
+        )
+    )
     sc = 0.0
     if re.search(r"expense\s+ratio|total\s+expense\s+ratio", low):
         sc += 16.0
@@ -72,6 +94,9 @@ def _snippet_score_expense_ratio(sentence: str) -> float:
         sc += 6.0
     if "%" in low:
         sc += 2.0
+    # Bare "%" must not float return-table rows: require fee vocabulary unless TER-ish pattern exists.
+    if not has_fee_vocab and not re.search(r"(?:expense|fee|cost|charged|direct\s+plan)\s+[^.]{0,40}\d+(?:\.\d+)?\s*%", low):
+        sc -= 25.0
     if re.search(r"exit\s+load", low) and not re.search(r"expense\s+ratio|total\s+expense\s+ratio|\bter\b", low):
         sc -= 20.0
     return sc
@@ -208,8 +233,32 @@ def _cache_key(query: str) -> str:
     return f"{_FAQ_CACHE_PREFIX}{query.strip().lower()}"
 
 
+def _is_extraction_failure_answer(text: str) -> bool:
+    return "could not pull an exact figure" in (text or "").lower()
+
+
+def _should_cache_faq_answer(answer: str) -> bool:
+    """Do not persist low-value or error-shaped replies (rate-limit fallbacks, table dumps)."""
+    body = (answer or "").strip()
+    if not body:
+        return False
+    if _is_extraction_failure_answer(body):
+        return False
+    if len(body) > 90 and _looks_like_returns_leaderboard_sentence(body):
+        return False
+    return True
+
+
 def _cache_get(query: str) -> tuple[str, list[str]] | None:
-    return _FAQ_ANSWER_CACHE.get(_cache_key(query))
+    key = _cache_key(query)
+    hit = _FAQ_ANSWER_CACHE.get(key)
+    if not hit:
+        return None
+    ans, src = hit
+    if not _should_cache_faq_answer(ans):
+        _FAQ_ANSWER_CACHE.pop(key, None)
+        return None
+    return hit
 
 
 def _cache_set(query: str, answer: str, sources: list[str]) -> None:
@@ -220,6 +269,8 @@ def _cache_set(query: str, answer: str, sources: list[str]) -> None:
         # simple FIFO-ish eviction (dict insertion order)
         oldest = next(iter(_FAQ_ANSWER_CACHE.keys()))
         _FAQ_ANSWER_CACHE.pop(oldest, None)
+    if not _should_cache_faq_answer(answer):
+        return
     _FAQ_ANSWER_CACHE[key] = (answer, sources[:2])
 
 
@@ -269,6 +320,20 @@ def _index_fund_exit_load_fallback(
     return answer, sources[:2]
 
 
+def _chunks_blob_for_fund_slug(session: Session, slug: str | None, *, limit: int = 32) -> str:
+    """Concatenate stored chunks for a scheme when vector search returns noisy slices."""
+    if not slug:
+        return ""
+    stmt = (
+        select(RagChunk.content)
+        .where(RagChunk.fund_slug == slug.strip())
+        .where(RagChunk.layer == "groww")
+        .limit(limit)
+    )
+    rows = list(session.scalars(stmt))
+    return "\n".join(str(r) for r in rows if r)
+
+
 def _prefer_slug_hits(hits: list[dict[str, Any]], slug: str | None) -> list[dict[str, Any]]:
     if not slug:
         return hits
@@ -311,6 +376,9 @@ def _deterministic_small_cap_expense_comparison(
         scan = slug_hits if slug_hits else hits
         blob = "\n".join(str(h.get("content", "")) for h in scan[:8])
         m = _extract_expense_ratio_pct_match(blob)
+        if not m:
+            blob = _chunks_blob_for_fund_slug(session, fund.slug)
+            m = _extract_expense_ratio_pct_match(blob) if blob else None
         if not m:
             continue
         pct_val = m.group(1)
@@ -689,6 +757,16 @@ def _deterministic_faq_answer(session: Session, query: str) -> tuple[str, list[s
                 "Funds charge exit load to discourage short-term redemptions and maintain portfolio stability."
             )
             return answer, _collect_sources(hits)
+        if _slug:
+            wide_el = _chunks_blob_for_fund_slug(session, _slug)
+            djw = _extract_exit_load_detail(wide_el) if wide_el else None
+            if djw:
+                main, tail = djw
+                answer = _two_sentences(
+                    f"The exit load is {main}{(' — ' + tail) if tail else ''}. "
+                    "Funds charge exit load to discourage short-term redemptions and maintain portfolio stability."
+                )
+                return answer, _collect_sources(hits)
         idx_fb = _index_fund_exit_load_fallback(_slug, _fund_url, hits)
         if idx_fb:
             return idx_fb
@@ -707,6 +785,13 @@ def _deterministic_faq_answer(session: Session, query: str) -> tuple[str, list[s
             pct = mj.group(1)
             answer = _two_sentences(f"The expense ratio found in our indexed sources is {pct}%.")
             return answer, _collect_sources(hits)
+        if _slug:
+            wide = _chunks_blob_for_fund_slug(session, _slug)
+            mw = _extract_expense_ratio_pct_match(wide) if wide else None
+            if mw:
+                pct = mw.group(1)
+                answer = _two_sentences(f"The expense ratio found in our indexed sources is {pct}%.")
+                return answer, _collect_sources(hits)
 
     elif "nav" in q:
         for h in hits:
@@ -721,8 +806,20 @@ def _deterministic_faq_answer(session: Session, query: str) -> tuple[str, list[s
     # Concept fallback: short extracted bullets when exact value not parsable.
     snippets = _extract_snippets(query, hits, limit=2)
     if snippets:
+        merged_snip = " ".join(snippets)
+        fee_m = _primary_fee_metric(query)
+        if fee_m == "expense_ratio" and not _extract_expense_ratio_pct_match(merged_snip):
+            snippets = []
+        elif fee_m == "exit_load" and not _extract_exit_load_detail(merged_snip):
+            snippets = []
+    if snippets:
         answer = _two_sentences(" ".join(_compact(s, max_len=120) for s in snippets))
         return answer, _collect_sources(hits)
+    if fee_pri == "expense_ratio" or fee_pri == "exit_load":
+        return (
+            _extraction_failure_message(query, _fund_url),
+            _collect_sources(hits),
+        )
     return None
 
 
@@ -1130,7 +1227,8 @@ def answer_faq(session: Session, query: str) -> AgentResult:
         src_block = _format_sources(used_urls)
         if src_block:
             answer = f"{answer}\n\n{src_block}"
-        _cache_set(query, answer_body, used_urls)
+        if _should_cache_faq_answer(answer_body):
+            _cache_set(query, answer_body, used_urls)
         return AgentResult(
             response_text=_compact(answer, max_len=520),
             payload={"sources": used_urls[:1], "confidence": "medium"},
@@ -1196,13 +1294,15 @@ def answer_faq(session: Session, query: str) -> AgentResult:
             sources.append(url)
         if len(sources) >= 2:
             break
-    response = _two_sentences(_heuristic_answer(query, top, fund_page_url=fb_url))
+    answer_body = _two_sentences(_heuristic_answer(query, top, fund_page_url=fb_url))
+    response = answer_body
     src_block = _format_sources(sources)
     if src_block:
         response = f"{response}\n\n{src_block}"
     if replanned:
         response = "I refined the search once to improve relevance.\n\n" + response
-    _cache_set(query, response, sources[:2])
+    if _should_cache_faq_answer(answer_body):
+        _cache_set(query, answer_body, sources[:2])
     return AgentResult(
         response_text=_compact(response, max_len=520),
         payload={"sources": sources[:1], "confidence": "medium"},
