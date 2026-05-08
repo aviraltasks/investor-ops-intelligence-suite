@@ -15,6 +15,7 @@ from app.sources.manifest import FUND_SOURCES
 # When fund-specific or comparative metric context applies: lift scheme pages, sink category hubs.
 GROWW_LAYER_SCORE_MULT = 1.3
 EXTRA_LAYER_SCORE_MULT = 0.7
+FUND_SLUG_PREF_MULT = 1.55  # When query resolves to a manifest fund, lift its scheme chunks
 
 _DISPLAY_SUFFIXES = (
     " fund direct growth",
@@ -80,13 +81,19 @@ def search_chunks(
     query: str,
     top_k: int = 5,
     layer: str | None = None,
+    preferred_fund_slug: str | None = None,
 ) -> list[dict]:
     """Return top_k chunks with scores. Full scan — OK for Phase 2 corpus size.
 
     When ``layer`` is None and the query looks fund- or metric-comparison-driven,
     cosine similarity for ``groww`` rows is multiplied by `GROWW_LAYER_SCORE_MULT` and
-    ``extra`` rows by `EXTRA_LAYER_SCORE_MULT`; other layers unchanged. The returned
-    ``score`` is this adjusted ranking score (not raw cosine).
+    ``extra`` rows by `EXTRA_LAYER_SCORE_MULT`; other layers unchanged.
+
+    When ``preferred_fund_slug`` is set (resolved manifest fund), matching ``groww``
+    chunks for that slug get an extra multiplier so casual fund names still retrieve
+    the right scheme page.
+
+    The returned ``score`` is this adjusted ranking score (not raw cosine).
     """
     q = query.strip()
     if not q:
@@ -108,12 +115,17 @@ def search_chunks(
     scores = (mat @ qv[0].astype(np.float32).T).ravel().astype(np.float64)
     rank_scores = scores.copy()
     apply_boost = layer is None and fund_metric_layer_boost_applies(q)
+    pref = (preferred_fund_slug or "").strip()
     if apply_boost:
         for i, r in enumerate(rows):
             if r.layer == "groww":
                 rank_scores[i] *= GROWW_LAYER_SCORE_MULT
             elif r.layer == "extra":
                 rank_scores[i] *= EXTRA_LAYER_SCORE_MULT
+    if pref:
+        for i, r in enumerate(rows):
+            if r.layer == "groww" and (r.fund_slug or "").strip() == pref:
+                rank_scores[i] *= FUND_SLUG_PREF_MULT
     order = np.argsort(-rank_scores)[:top_k]
 
     out: list[dict] = []

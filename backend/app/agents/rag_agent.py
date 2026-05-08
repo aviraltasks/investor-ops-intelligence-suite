@@ -13,12 +13,120 @@ from app.agents.types import AgentResult, AgentTraceStep
 from app.llm.client import chat_completion_safe, llm_available, parse_json_object
 from app.db.models import RagChunk
 from app.rag.embed import get_embedder
+from app.rag.fund_resolve import resolve_manifest_fund
 from app.rag.search import search_chunks
 from app.sources.manifest import FUND_SOURCES
 
 _FAQ_ANSWER_CACHE: dict[str, tuple[str, list[str]]] = {}
 _FAQ_CACHE_MAX = 300
 _FUND_NAME_KEYS = tuple((f.display_name or "").lower() for f in FUND_SOURCES)
+
+
+def expense_ratio_requested(query: str) -> bool:
+    """Typo-tolerant detection for expense ratio intent (user query)."""
+    ql = (query or "").lower()
+    # Matches ratio | ration | ratios | common typo expence
+    if re.search(r"expense\s+rati(?:o|on)s?\b", ql):
+        return True
+    if re.search(r"expence\s+rati(?:o|on)s?\b", ql):
+        return True
+    return False
+
+
+def exit_load_requested(query: str) -> bool:
+    ql = (query or "").lower()
+    return "exit load" in ql or bool(re.search(r"\bexit\s+loads?\b", ql))
+
+
+def _primary_fee_metric(query: str) -> str | None:
+    """When both fee metrics appear, prefer the one that occurs first in the query."""
+    er = expense_ratio_requested(query)
+    el = exit_load_requested(query)
+    if er and not el:
+        return "expense_ratio"
+    if el and not er:
+        return "exit_load"
+    if er and el:
+        ql = (query or "").lower()
+        m = re.search(r"expense\s+rati(?:o|on)s?\b|expence\s+rati(?:o|on)s?\b", ql)
+        pos_er = m.start() if m else 10**9
+        pos_el = ql.find("exit load")
+        if pos_el < 0:
+            pos_el = 10**9
+        return "expense_ratio" if pos_er <= pos_el else "exit_load"
+    return None
+
+
+def _snippet_score_expense_ratio(sentence: str) -> float:
+    low = sentence.lower()
+    sc = 0.0
+    if re.search(r"expense\s+ratio|total\s+expense\s+ratio", low):
+        sc += 16.0
+    elif "total expense" in low:
+        sc += 11.0
+    if re.search(r"\bter\b", low):
+        sc += 10.0
+    if "expense" in low:
+        sc += 6.0
+    if "%" in low:
+        sc += 2.0
+    if re.search(r"exit\s+load", low) and not re.search(r"expense\s+ratio|total\s+expense\s+ratio|\bter\b", low):
+        sc -= 20.0
+    return sc
+
+
+def _snippet_score_exit_load(sentence: str) -> float:
+    low = sentence.lower()
+    sc = 0.0
+    if "exit load" in low:
+        sc += 18.0
+    elif re.search(r"\bredeem|redemption", low):
+        sc += 7.0
+    if "%" in low:
+        sc += 3.0
+    if re.search(r"expense\s+ratio|total\s+expense\s+ratio", low) and "exit load" not in low:
+        sc -= 18.0
+    if re.search(r"\bter\b", low) and "exit load" not in low:
+        sc -= 12.0
+    return sc
+
+
+def _extract_exit_load_detail(text: str) -> tuple[str, str] | None:
+    """Parse exit load from chunk text: supports Nil/NA and numeric with or without %."""
+    if not text:
+        return None
+    t = text
+    # Nil / not applicable (common on index funds)
+    m = re.search(
+        r"exit\s+load[^.\n]{0,220}?\b(nil|n\.a\.|n\/a|\bn/a\b|not\s+applicable|no\s+exit\s+load)\b",
+        t,
+        re.IGNORECASE,
+    )
+    if m:
+        raw = m.group(1).strip().lower()
+        if raw in {"nil", "n/a", "n.a.", "not applicable", "no exit load"}:
+            return ("Nil", "")
+        return (m.group(1).strip(), "")
+    # Standard: ... X% ...
+    m = re.search(r"exit\s+load[^.\n]{0,160}?(\d+(?:\.\d+)?)\s*%([^.\n]{0,120})", t, re.IGNORECASE)
+    if m:
+        return (f"{m.group(1)}%", _compact(m.group(2), max_len=80))
+    # Numeric near label without forcing % on same token
+    m = re.search(r"exit\s+load[^.\n]{0,120}?(\d+(?:\.\d+)?)(?:\s*%|\s*percent)?", t, re.IGNORECASE)
+    if m:
+        return (f"{m.group(1)}%", "")
+    return None
+
+
+def _extract_expense_ratio_pct_match(text: str) -> re.Match[str] | None:
+    for pat in (
+        r"expense\s+ratio[^.\n]{0,100}?(\d+(?:\.\d+)?)\s*%",
+        r"(?:total\s+expense\s+ratio|\bter\b)[^.\n]{0,100}?(\d+(?:\.\d+)?)\s*%",
+    ):
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            return m
+    return None
 
 
 def _query_terms(query: str) -> set[str]:
@@ -44,9 +152,16 @@ def _query_terms(query: str) -> set[str]:
     return {t for t in terms if t not in stop}
 
 
-def _rerank_and_trim_hits(query: str, hits: list[dict[str, Any]], top_k: int = 4) -> list[dict[str, Any]]:
+def _rerank_and_trim_hits(
+    query: str,
+    hits: list[dict[str, Any]],
+    top_k: int = 4,
+    *,
+    preferred_fund_slug: str | None = None,
+) -> list[dict[str, Any]]:
     """Boost lexical overlap so final context stays tightly on-topic."""
     terms = _query_terms(query)
+    pref = (preferred_fund_slug or "").strip()
     if not hits:
         return []
     scored: list[tuple[float, dict[str, Any]]] = []
@@ -55,6 +170,8 @@ def _rerank_and_trim_hits(query: str, hits: list[dict[str, Any]], top_k: int = 4
         hay = f"{h.get('source_url', '')} {h.get('content', '')}".lower()
         overlap = sum(1 for t in terms if t in hay)
         score = base + (0.06 * overlap)
+        if pref and str(h.get("fund_slug") or "").strip() == pref:
+            score += 0.35
         scored.append((score, h))
     scored.sort(key=lambda x: x[0], reverse=True)
     trimmed = [h for _, h in scored[: max(2, top_k)]]
@@ -118,6 +235,8 @@ def _two_sentences(text: str) -> str:
 
 def _query_has_specific_fund(query: str) -> bool:
     q = (query or "").lower()
+    if resolve_manifest_fund(query)[0]:
+        return True
     if any(name and name in q for name in _FUND_NAME_KEYS):
         return True
     # Handle common shorthand mentions for this corpus.
@@ -141,7 +260,7 @@ def _query_has_specific_fund(query: str) -> bool:
 
 def _is_metric_query(query: str) -> bool:
     q = (query or "").lower()
-    return any(k in q for k in ("nav", "expense ratio", "exit load"))
+    return expense_ratio_requested(query) or exit_load_requested(query) or "nav" in q
 
 
 def _is_concept_query(query: str) -> bool:
@@ -176,20 +295,26 @@ def _deterministic_metric_clarifier(query: str) -> tuple[str, list[str]] | None:
             "If you want the current NAV number, tell me the exact fund name."
         )
         return answer, ["https://investor.sebi.gov.in/securities-mf-investments.html"]
-    if "expense ratio" in q and is_concept and not has_fund:
+    if expense_ratio_requested(query) and is_concept and not has_fund:
         answer = _two_sentences(
             "Expense ratio is the annual percentage fee a fund charges to manage your money. "
             "If you want the exact value, share the fund name and I will fetch it."
         )
         return answer, ["https://investor.sebi.gov.in/understanding_mf.html"]
-    if "exit load" in q and is_concept and not has_fund:
+    if exit_load_requested(query) and is_concept and not has_fund:
         answer = _two_sentences(
             "Exit load is a fee charged when units are redeemed within a defined period. "
             "If you want the exact percentage, share the fund name."
         )
         return answer, ["https://investor.sebi.gov.in/exit_load.html"]
     if not has_fund:
-        metric = "NAV" if "nav" in q else "expense ratio" if "expense ratio" in q else "exit load"
+        metric = (
+            "NAV"
+            if "nav" in q
+            else "expense ratio"
+            if expense_ratio_requested(query)
+            else "exit load"
+        )
         answer = _two_sentences(
             f"I can fetch exact {metric} values, but I need the fund name first. "
             f"Please share the fund, for example: '{metric} of Mirae Asset ELSS'."
@@ -210,52 +335,115 @@ def _sentences(text: str) -> list[str]:
 
 
 def _extract_snippets(query: str, hits: list[dict[str, Any]], limit: int = 3) -> list[str]:
-    q = query.lower()
-    if "exit load" in q:
-        keys = ["exit load", "redeem", "redemption", "lock-in", "elss"]
-    elif "nav" in q:
-        keys = ["nav", "net asset value", "asset value"]
-    elif "expense ratio" in q:
-        keys = ["expense ratio", "expense", "%"]
-    else:
-        keys = _query_terms(query) or {"fund", "mutual"}
+    """Pull readable sentences; for fee metrics use scored lines so exit load does not hijack expense queries."""
+    ql = (query or "").lower()
+    fee_m = _primary_fee_metric(query)
     snippets: list[str] = []
     seen: set[str] = set()
-    for h in hits:
-        for s in _sentences(str(h.get("content", ""))):
-            low = s.lower()
-            if not any(k in low for k in keys):
-                continue
-            if ("nav" in q or "exit load" in q or "expense ratio" in q) and not re.search(r"\d", s):
-                continue
-            s = s[:220].rstrip()
+
+    def metric_digit_skip(sentence: str) -> bool:
+        if not ("nav" in ql or exit_load_requested(query) or expense_ratio_requested(query)):
+            return False
+        if re.search(r"\d", sentence):
+            return False
+        if "nil" in sentence.lower():
+            return False
+        return True
+
+    if fee_m == "expense_ratio":
+        ranked: list[tuple[float, str]] = []
+        for h in hits:
+            for s in _sentences(str(h.get("content", ""))):
+                if metric_digit_skip(s):
+                    continue
+                sc = _snippet_score_expense_ratio(s)
+                if sc <= 0:
+                    continue
+                ranked.append((sc, s[:220].rstrip()))
+        ranked.sort(key=lambda x: x[0], reverse=True)
+        for sc, s in ranked:
             if s in seen:
                 continue
             seen.add(s)
             snippets.append(s)
             if len(snippets) >= limit:
                 return snippets
+        return snippets
+
+    if fee_m == "exit_load":
+        ranked = []
+        for h in hits:
+            for s in _sentences(str(h.get("content", ""))):
+                if metric_digit_skip(s):
+                    continue
+                sc = _snippet_score_exit_load(s)
+                if sc <= 0:
+                    continue
+                ranked.append((sc, s[:220].rstrip()))
+        ranked.sort(key=lambda x: x[0], reverse=True)
+        for sc, s in ranked:
+            if s in seen:
+                continue
+            seen.add(s)
+            snippets.append(s)
+            if len(snippets) >= limit:
+                return snippets
+        return snippets
+
+    if "nav" in ql:
+        keys = ["nav", "net asset value", "asset value"]
+    else:
+        keys = list(_query_terms(query)) or ["fund", "mutual"]
+    for h in hits:
+        for s in _sentences(str(h.get("content", ""))):
+            low = s.lower()
+            if not any(k in low for k in keys):
+                continue
+            if ("nav" in ql or exit_load_requested(query) or expense_ratio_requested(query)) and metric_digit_skip(s):
+                continue
+            piece = s[:220].rstrip()
+            if piece in seen:
+                continue
+            seen.add(piece)
+            snippets.append(piece)
+            if len(snippets) >= limit:
+                return snippets
     return snippets
 
 
-def _heuristic_answer(query: str, hits: list[dict[str, Any]]) -> str:
+def _extraction_failure_message(query: str, fund_page_url: str | None) -> str:
+    msg = (
+        "I found related sources in our index, but could not pull an exact figure from the text snippets we have. "
+    )
+    if fund_page_url:
+        msg += f"You can double-check on the scheme page: {fund_page_url} "
+    msg += (
+        "Try the full official scheme name if unsure—for example "
+        "“What is the exit load of UTI Nifty 50 Index Fund Direct Growth?”."
+    )
+    return _two_sentences(msg)
+
+
+def _heuristic_answer(
+    query: str,
+    hits: list[dict[str, Any]],
+    *,
+    fund_page_url: str | None = None,
+) -> str:
     snippets = _extract_snippets(query, hits, limit=3)
     if snippets:
         q = query.lower()
-        if "exit load" in q:
+        if exit_load_requested(query):
             intro = "From indexed fund sources, the key exit-load details are:"
         elif "nav" in q:
             intro = "From indexed fund sources, the key NAV details are:"
-        elif "expense ratio" in q:
+        elif expense_ratio_requested(query):
             intro = "From indexed sources, the key expense-ratio details are:"
         else:
             intro = "From available sources, the key facts are:"
         joined = "; ".join(_compact(s, max_len=120) for s in snippets[:2])
         return _two_sentences(f"{intro} {joined}.")
-    return (
-        "I found related sources, but I could not extract a precise value for this exact query from current indexed text. "
-        "Please ask with fund name plus exact metric (for example, 'expense ratio of <fund>')."
-    )
+    return _extraction_failure_message(query, fund_page_url)
 
 
 def _collect_sources(hits: list[dict[str, Any]], limit: int = 2) -> list[str]:
@@ -287,9 +475,10 @@ def _deterministic_comparison_answer(query: str, hits: list[dict[str, Any]]) -> 
         return None
 
     metric = ""
-    if "expense ratio" in q:
+    metric_re: re.Pattern[str] | None = None
+    suffix = ""
+    if expense_ratio_requested(query):
         metric = "expense_ratio"
-        metric_re = re.compile(r"expense ratio[^.\n]{0,80}?(\d+(?:\.\d+)?)\s*%", re.IGNORECASE)
         suffix = "%"
     elif "nav" in q:
         metric = "nav"
@@ -302,7 +491,10 @@ def _deterministic_comparison_answer(query: str, hits: list[dict[str, Any]]) -> 
     seen_labels: set[str] = set()
     for h in hits:
         text = str(h.get("content", ""))
-        m = metric_re.search(text)
+        if metric == "expense_ratio":
+            m = _extract_expense_ratio_pct_match(text)
+        else:
+            m = metric_re.search(text) if metric_re else None
         if not m:
             continue
         label = _fund_label(h)
@@ -337,9 +529,20 @@ def _deterministic_faq_answer(session: Session, query: str) -> tuple[str, list[s
     Returns (answer, sources) when confident, else None.
     """
     q = query.lower()
-    if not any(k in q for k in ["exit load", "nav", "expense ratio", "compare", "vs", "versus", "difference", "between"]):
+    if not (
+        exit_load_requested(query)
+        or expense_ratio_requested(query)
+        or "nav" in q
+        or any(k in q for k in ["compare", "vs", "versus", "difference", "between"])
+    ):
         return None
-    hits = _rerank_and_trim_hits(query, search_chunks(session, get_embedder(), query, top_k=8), top_k=6)
+    _slug, _fund_url = resolve_manifest_fund(query)
+    hits = _rerank_and_trim_hits(
+        query,
+        search_chunks(session, get_embedder(), query, top_k=8, preferred_fund_slug=_slug),
+        top_k=6,
+        preferred_fund_slug=_slug,
+    )
     if not hits:
         return None
 
@@ -347,20 +550,31 @@ def _deterministic_faq_answer(session: Session, query: str) -> tuple[str, list[s
     if cmp_ans:
         return cmp_ans
 
-    if "exit load" in q:
+    fee_pri = _primary_fee_metric(query)
+
+    if fee_pri == "exit_load":
         for h in hits:
             text = str(h.get("content", ""))
-            m = re.search(r"exit load[^.\n]{0,120}?(\d+(?:\.\d+)?)\s*%([^.\n]{0,120})", text, re.IGNORECASE)
+            detail = _extract_exit_load_detail(text)
+            if not detail:
+                continue
+            main, tail = detail
+            answer = _two_sentences(
+                f"The exit load is {main}{(' — ' + tail) if tail else ''}. "
+                "Funds charge exit load to discourage short-term redemptions and maintain portfolio stability."
+            )
+            return answer, _collect_sources([h] + hits)
+
+    elif fee_pri == "expense_ratio":
+        for h in hits:
+            text = str(h.get("content", ""))
+            m = _extract_expense_ratio_pct_match(text)
             if m:
                 pct = m.group(1)
-                tail = _compact(m.group(2), max_len=80)
-                answer = _two_sentences(
-                    f"The exit load is {pct}%{(' ' + tail) if tail else ''}. "
-                    "Funds charge exit load to discourage short-term redemptions and maintain portfolio stability."
-                )
+                answer = _two_sentences(f"The expense ratio found in our indexed sources is {pct}%.")
                 return answer, _collect_sources([h] + hits)
 
-    if "nav" in q:
+    elif "nav" in q:
         for h in hits:
             text = str(h.get("content", ""))
             # Typical patterns: "NAV: 123.45" or "NAV is ₹123.45"
@@ -368,15 +582,6 @@ def _deterministic_faq_answer(session: Session, query: str) -> tuple[str, list[s
             if m:
                 nav = m.group(1)
                 answer = _two_sentences(f"The latest NAV found in our indexed sources is ₹{nav}.")
-                return answer, _collect_sources([h] + hits)
-
-    if "expense ratio" in q:
-        for h in hits:
-            text = str(h.get("content", ""))
-            m = re.search(r"expense ratio[^.\n]{0,80}?(\d+(?:\.\d+)?)\s*%", text, re.IGNORECASE)
-            if m:
-                pct = m.group(1)
-                answer = _two_sentences(f"The expense ratio found in our indexed sources is {pct}%.")
                 return answer, _collect_sources([h] + hits)
 
     # Concept fallback: short extracted bullets when exact value not parsable.
@@ -415,7 +620,7 @@ def _deterministic_fund_only_prompt(query: str) -> tuple[str, list[str]] | None:
     if not q or len(q.split()) > 8:
         return None
     has_fund = _query_has_specific_fund(q)
-    has_metric = any(k in q for k in ("nav", "expense ratio", "exit load", "aum"))
+    has_metric = any(k in q for k in ("nav", "aum")) or expense_ratio_requested(query) or exit_load_requested(query)
     if not has_fund or has_metric:
         return None
     answer = _two_sentences(
@@ -496,11 +701,24 @@ def _deterministic_domain_clarifier(query: str) -> tuple[str, list[str]] | None:
     return None
 
 
-def _merge_hits(session: Session, queries: list[str], top_per: int = 4) -> list[dict[str, Any]]:
+def _merge_hits(
+    session: Session,
+    queries: list[str],
+    top_per: int = 4,
+    *,
+    preferred_fund_slug: str | None = None,
+) -> list[dict[str, Any]]:
     seen: set[str] = set()
     merged: list[dict[str, Any]] = []
     for q in queries:
-        for h in search_chunks(session, get_embedder(), q, top_k=top_per, layer=None):
+        for h in search_chunks(
+            session,
+            get_embedder(),
+            q,
+            top_k=top_per,
+            layer=None,
+            preferred_fund_slug=preferred_fund_slug,
+        ):
             key = f"{h.get('source_url', '')}#{h.get('chunk_index', 0)}"
             if key in seen:
                 continue
@@ -677,7 +895,8 @@ def answer_faq(session: Session, query: str) -> AgentResult:
             )
         )
 
-        hits = _merge_hits(session, queries)
+        plan_slug, plan_url = resolve_manifest_fund(query)
+        hits = _merge_hits(session, queries, preferred_fund_slug=plan_slug)
         traces.append(
             AgentTraceStep(
                 agent="rag_agent",
@@ -698,7 +917,7 @@ def answer_faq(session: Session, query: str) -> AgentResult:
                 traces=traces,
             )
 
-        top = _rerank_and_trim_hits(query, hits, top_k=4)
+        top = _rerank_and_trim_hits(query, hits, top_k=4, preferred_fund_slug=plan_slug)
         context_blocks = []
         source_by_idx: dict[int, str] = {}
         for idx, h in enumerate(top, start=1):
@@ -718,6 +937,8 @@ def answer_faq(session: Session, query: str) -> AgentResult:
                         "answer rules: conversational, concise, default to max 2 sentences for simple questions, "
                         "no raw chunk dumping, no ellipses from excerpts, "
                         "include concrete values when present (NAV, %, period), and if data is insufficient say that clearly. "
+                        "Metric discipline: if the user asks only for expense ratio (or TER), do not answer with exit-load figures (and vice versa), "
+                        "unless the question explicitly asks for both. "
                         "used_source_indices rules: include only 1-2 excerpt indices actually used for the final answer."
                     ),
                 },
@@ -766,7 +987,7 @@ def answer_faq(session: Session, query: str) -> AgentResult:
                     break
         if not answer_body:
             # Non-LLM/parse fallback: provide query-specific extracted facts.
-            answer_body = _heuristic_answer(query, top)
+            answer_body = _heuristic_answer(query, top, fund_page_url=plan_url)
         answer = _two_sentences(answer_body.strip())
         src_block = _format_sources(used_urls)
         if src_block:
@@ -779,7 +1000,8 @@ def answer_faq(session: Session, query: str) -> AgentResult:
         )
 
     # --- Deterministic fallback (no LLM keys) ---
-    first_hits = search_chunks(session, get_embedder(), query, top_k=4)
+    fb_slug, fb_url = resolve_manifest_fund(query)
+    first_hits = search_chunks(session, get_embedder(), query, top_k=4, preferred_fund_slug=fb_slug)
     traces.append(
         AgentTraceStep(
             agent="rag_agent",
@@ -794,7 +1016,13 @@ def answer_faq(session: Session, query: str) -> AgentResult:
     hits = first_hits
     replanned = False
     if best_score < 0.1 or len(first_hits) < 2:
-        hits = search_chunks(session, get_embedder(), f"{query} expense ratio exit load nav", top_k=5)
+        hits = search_chunks(
+            session,
+            get_embedder(),
+            f"{query} expense ratio exit load nav",
+            top_k=5,
+            preferred_fund_slug=fb_slug,
+        )
         replanned = True
         traces.append(
             AgentTraceStep(
@@ -816,7 +1044,7 @@ def answer_faq(session: Session, query: str) -> AgentResult:
             traces=traces,
         )
 
-    top = _rerank_and_trim_hits(query, hits, top_k=3)
+    top = _rerank_and_trim_hits(query, hits, top_k=3, preferred_fund_slug=fb_slug)
     sources: list[str] = []
     for h in top:
         url = str(h.get("source_url", "")).strip()
@@ -824,7 +1052,7 @@ def answer_faq(session: Session, query: str) -> AgentResult:
             sources.append(url)
         if len(sources) >= 2:
             break
-    response = _two_sentences(_heuristic_answer(query, top))
+    response = _two_sentences(_heuristic_answer(query, top, fund_page_url=fb_url))
     src_block = _format_sources(sources)
     if src_block:
         response = f"{response}\n\n{src_block}"
