@@ -103,12 +103,10 @@ const AGENT_COLORS: Record<string, string> = {
   memory_agent: "bg-emerald-100 text-emerald-800",
 };
 
-type ProgressState = "working" | "done" | "blocked";
-type ProgressItem = {
+type TraceTurnBlock = {
   id: string;
-  label: string;
-  detail: string;
-  state: ProgressState;
+  userQuery: string;
+  traces: AgentTrace[];
 };
 
 function voiceTtsText(data: ChatApiResponse): string {
@@ -150,42 +148,6 @@ function inferProcessingText(input: string): string {
     return "Analyzing current trends...";
   }
   return "Searching knowledge base...";
-}
-
-function friendlyStageLabel(agent: string): string {
-  const a = (agent || "").toLowerCase();
-  if (a === "orchestrator") return "Understanding your request";
-  if (a === "rag_agent") return "Checking fund information";
-  if (a === "scheduling_agent") return "Checking appointment options";
-  if (a === "review_intelligence_agent") return "Checking trend insights";
-  if (a === "memory_agent") return "Saving context for continuity";
-  if (a === "email_drafting_agent") return "Preparing advisor message";
-  return "Processing your request";
-}
-
-function friendlyTraceDetail(t: AgentTrace): string {
-  const outcome = (t.outcome || "").toLowerCase();
-  if (outcome.includes("invalid_time_request")) return "Need one detail to continue booking.";
-  if (outcome.includes("awaiting")) return "Waiting for your confirmation.";
-  if (outcome.includes("conflict")) return "That slot is already held; pick another time.";
-  if (outcome.includes("fallback") || outcome.includes("error")) return "Temporary issue; retrying safely.";
-  if (outcome.includes("slots_returned")) return "Available slots are ready.";
-  return "Completed.";
-}
-
-function progressStateFromTrace(t: AgentTrace): ProgressState {
-  const outcome = (t.outcome || "").toLowerCase();
-  if (
-    outcome.includes("invalid") ||
-    outcome.includes("conflict") ||
-    outcome.includes("needs_") ||
-    outcome.includes("error") ||
-    outcome.includes("fallback")
-  ) {
-    return "blocked";
-  }
-  if (outcome.includes("awaiting")) return "working";
-  return "done";
 }
 
 function voiceModeHelperText(state: VoiceModeState, processingSlow: boolean): string {
@@ -268,7 +230,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const [isLoading, setIsLoading] = useState(false);
   const [showDisclaimer, setShowDisclaimer] = useState(true);
   const [showAgentPanel, setShowAgentPanel] = useState(true);
-  const [traces, setTraces] = useState<AgentTrace[]>([]);
+  const [traceTurnHistory, setTraceTurnHistory] = useState<TraceTurnBlock[]>([]);
+  const [pendingTraceQuery, setPendingTraceQuery] = useState<string | null>(null);
   const [lastPayload, setLastPayload] = useState<ChatPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sttSupported, setSttSupported] = useState(false);
@@ -281,6 +244,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const [ttsState, setTtsState] = useState<TtsState>("idle");
   const [ttsErrorDetail, setTtsErrorDetail] = useState<string | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const agentPanelScrollRef = useRef<HTMLDivElement | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const recognitionActiveRef = useRef(false);
   const synthesisUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
@@ -754,6 +718,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
     setMessages((prev) => [...prev, { role: "user", text: msg }]);
     setInput("");
     setIsLoading(true);
+    setPendingTraceQuery(msg);
     if (voiceModeStateRef.current === "listening") {
       transitionVoice("USER_SPEECH_CAPTURED");
     }
@@ -770,7 +735,18 @@ export function ChatClient({ initialName }: { initialName: string }) {
       if (!res.ok) throw new Error(`Chat API failed (${res.status})`);
       const data = (await res.json()) as ChatApiResponse;
       setMessages((prev) => [...prev, { role: "assistant", text: data.response }]);
-      setTraces(data.traces || []);
+      const nextTraces = data.traces || [];
+      setTraceTurnHistory((prev) => [
+        {
+          id:
+            typeof crypto !== "undefined" && crypto.randomUUID
+              ? crypto.randomUUID()
+              : `turn-${Date.now()}`,
+          userQuery: msg,
+          traces: nextTraces,
+        },
+        ...prev,
+      ]);
       setLastPayload(data.payload || null);
       // Hands-free voice mode: speak every assistant reply, then auto-listen.
       if (isVoiceActive(voiceModeStateRef.current) && ttsSupported) {
@@ -793,6 +769,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
       }
     } finally {
       setIsLoading(false);
+      setPendingTraceQuery(null);
       setMicState((cur) => (cur === "processing" ? "idle" : cur));
       if (autoListenWatchdogRef.current !== null) {
         window.clearTimeout(autoListenWatchdogRef.current);
@@ -884,36 +861,36 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const bookingCode = typeof lastPayload?.booking_code === "string" ? lastPayload.booking_code : null;
   const debugAgentTrace =
     typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debugAgents") === "1";
-  const progressItems = useMemo<ProgressItem[]>(() => {
-    if (isLoading) {
-      return [
-        {
-          id: "working-now",
-          label: "Working on your request",
-          detail: processingText,
-          state: "working",
-        },
-      ];
-    }
-    if (!traces.length) {
-      return [
-        {
-          id: "idle",
-          label: "Ready",
-          detail: "Ask a question and I will show progress here.",
-          state: "done",
-        },
-      ];
-    }
-    const latestByAgent = new Map<string, AgentTrace>();
-    for (const t of traces) latestByAgent.set(t.agent, t);
-    return Array.from(latestByAgent.entries()).map(([agent, t]) => ({
-      id: agent,
-      label: friendlyStageLabel(agent),
-      detail: friendlyTraceDetail(t),
-      state: progressStateFromTrace(t),
-    }));
-  }, [traces, isLoading, processingText]);
+
+  function renderTraceStepCard(t: AgentTrace, stepKey: string) {
+    return (
+      <div key={stepKey} className="rounded-lg border border-slate-200 bg-slate-50/80 p-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span
+            className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
+              AGENT_COLORS[t.agent] || "bg-slate-100 text-slate-700"
+            }`}
+          >
+            {t.agent}
+          </span>
+          <span className="text-[11px] text-slate-500">{t.replanned ? "Replanned" : "Single pass"}</span>
+        </div>
+        <p className="mt-1.5 text-xs leading-snug text-slate-800">{t.reasoning_brief}</p>
+        {t.tools?.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {t.tools.map((tool) => (
+              <span key={tool} className="rounded bg-white px-1.5 py-0.5 text-[11px] text-slate-600 ring-1 ring-slate-200">
+                {tool}
+              </span>
+            ))}
+          </div>
+        )}
+        <p className="mt-1.5 font-mono text-[11px] text-slate-600">
+          <span className="font-sans text-slate-500">Outcome:</span> {t.outcome || "—"}
+        </p>
+      </div>
+    );
+  }
 
   return (
     <section className="mt-6 grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">
@@ -1115,9 +1092,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
 
       <aside className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-slate-900">
-            {debugAgentTrace ? "Agent Activity (Debug)" : "How Finn Is Helping"}
-          </h2>
+          <h2 className="text-sm font-semibold text-slate-900">How Finn Is Helping</h2>
           <button
             type="button"
             className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700"
@@ -1128,64 +1103,53 @@ export function ChatClient({ initialName }: { initialName: string }) {
         </div>
 
         {showAgentPanel ? (
-          debugAgentTrace ? (
-            traces.length ? (
-              <div className="space-y-2">
-                {traces.map((t, idx) => (
-                  <div key={`${t.agent}-${idx}`} className="rounded-lg border border-slate-200 p-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span
-                        className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
-                          AGENT_COLORS[t.agent] || "bg-slate-100 text-slate-700"
-                        }`}
-                      >
-                        {t.agent}
-                      </span>
-                      <span className="text-[11px] text-slate-500">
-                        {t.replanned ? "Replanned" : "Single pass"}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-xs text-slate-700">{t.reasoning_brief}</p>
-                    {t.tools?.length > 0 && (
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {t.tools.map((tool) => (
-                          <span
-                            key={tool}
-                            className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600"
-                          >
-                            {tool}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    <p className="mt-1 text-[11px] text-slate-500">Outcome: {t.outcome}</p>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-slate-500">Debug traces will appear after your first message.</p>
-            )
-          ) : (
-            <div className="space-y-2">
-              {progressItems.map((p) => (
-                <div key={p.id} className="rounded-lg border border-slate-200 px-3 py-2">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`inline-block h-2.5 w-2.5 rounded-full ${
-                        p.state === "done"
-                          ? "bg-emerald-500"
-                          : p.state === "working"
-                            ? "animate-pulse bg-amber-500"
-                            : "bg-rose-500"
-                      }`}
-                    />
-                    <p className="text-xs font-semibold text-slate-800">{p.label}</p>
-                  </div>
-                  <p className="mt-1 text-xs text-slate-600">{p.detail}</p>
+          <div
+            ref={agentPanelScrollRef}
+            className="max-h-[min(70vh,520px)] space-y-0 overflow-y-auto overscroll-contain pr-1"
+          >
+            {isLoading && pendingTraceQuery && (
+              <div className="mb-4 border-b border-slate-200 pb-3">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Latest</p>
+                <p className="mt-1 line-clamp-3 text-xs text-slate-800">&ldquo;{pendingTraceQuery}&rdquo;</p>
+                <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50/80 px-2 py-2">
+                  <p className="text-xs font-semibold text-amber-900">Working…</p>
+                  <p className="text-[11px] text-amber-800">{processingText}</p>
                 </div>
-              ))}
-            </div>
-          )
+              </div>
+            )}
+
+            {!isLoading && !traceTurnHistory.length && (
+              <p className="text-xs text-slate-500">
+                Ask a question to see the real agent trace from the API (reasoning, tools, outcomes).
+              </p>
+            )}
+
+            {traceTurnHistory.map((block, blockIdx) => (
+              <div key={block.id} className={blockIdx > 0 ? "mt-4 border-t border-slate-200 pt-4" : ""}>
+                <div className="mb-2 flex items-baseline justify-between gap-2">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                    {blockIdx === 0 ? "Latest turn" : "Earlier turn"}
+                  </p>
+                </div>
+                <p className="mb-2 line-clamp-4 text-xs font-medium text-slate-800">&ldquo;{block.userQuery}&rdquo;</p>
+                <div className="space-y-2">
+                  {block.traces.length ? (
+                    block.traces.map((t, idx) => renderTraceStepCard(t, `${block.id}-s${idx}`))
+                  ) : (
+                    <p className="text-xs text-slate-500">No trace steps returned for this message.</p>
+                  )}
+                </div>
+                {debugAgentTrace && blockIdx === 0 && lastPayload && Object.keys(lastPayload).length > 0 && (
+                  <details className="mt-2 rounded border border-slate-200 bg-slate-50 p-2 text-[11px]">
+                    <summary className="cursor-pointer font-medium text-slate-700">Payload (debug)</summary>
+                    <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-all text-slate-600">
+                      {JSON.stringify(lastPayload, null, 2)}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            ))}
+          </div>
         ) : (
           <p className="text-xs text-slate-500">Panel collapsed.</p>
         )}
