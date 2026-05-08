@@ -280,7 +280,7 @@ When **`GROQ_API_KEY`** and/or **`GEMINI_API_KEY`** are set on the **backend** (
 - **RAG agent** (`app/agents/rag_agent.py`): LLM **retrieval plan** (search queries) then vector search, then LLM **grounded synthesis** with source URLs. If no keys are set, behavior is the previous deterministic snippet path.
 - **Scheduling agent** (`app/agents/scheduling_agent.py`): **Rules still enforce** slots, conflicts, and cancellations; on success paths the **user-facing wording** is optionally rewritten by an LLM for natural tone.
 
-Implementation: `backend/app/llm/client.py` (httpx → Groq OpenAI-compatible API, then Gemini `generateContent`). Models: `GROQ_MODEL` (default `llama-3.3-70b-versatile`), `GEMINI_MODEL` (default `gemini-3.1-flash-lite-preview`).
+Implementation: `backend/app/llm/client.py` (httpx → Groq OpenAI-compatible API, then Gemini `generateContent`). Models: `GROQ_MODEL` (default `llama-3.3-70b-versatile`), `GEMINI_MODEL` (default `gemini-2.5-flash-lite`).
 
 ## Architecture summary
 

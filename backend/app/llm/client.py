@@ -32,7 +32,7 @@ def _groq_model() -> str:
     return os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
 
 
-_DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
+_DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite"
 
 
 def _gemini_model() -> str:

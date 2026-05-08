@@ -25,4 +25,4 @@ def test_parse_json_object_embedded() -> None:
 
 def test_gemini_model_default_when_env_missing(monkeypatch) -> None:
     monkeypatch.delenv("GEMINI_MODEL", raising=False)
-    assert llm_client._gemini_model() == "gemini-3.1-flash-lite-preview"
+    assert llm_client._gemini_model() == "gemini-2.5-flash-lite"
