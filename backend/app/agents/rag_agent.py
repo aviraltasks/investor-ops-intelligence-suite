@@ -19,6 +19,8 @@ from app.sources.manifest import FUND_SOURCES
 
 _FAQ_ANSWER_CACHE: dict[str, tuple[str, list[str]]] = {}
 _FAQ_CACHE_MAX = 300
+# Bump when FAQ strings/logic change so stale in-process cache entries are not reused.
+_FAQ_CACHE_PREFIX = "v3:"
 _FUND_NAME_KEYS = tuple((f.display_name or "").lower() for f in FUND_SOURCES)
 
 
@@ -98,7 +100,7 @@ def _extract_exit_load_detail(text: str) -> tuple[str, str] | None:
     t = text
     # Nil / not applicable (common on index funds)
     m = re.search(
-        r"exit\s+load[^.\n]{0,220}?\b(nil|n\.a\.|n\/a|\bn/a\b|not\s+applicable|no\s+exit\s+load)\b",
+        r"exit\s+load[^.\n]{0,260}?\b(nil|n\.a\.|n\/a|\bn/a\b|not\s+applicable|no\s+exit\s+load)\b",
         t,
         re.IGNORECASE,
     )
@@ -115,15 +117,31 @@ def _extract_exit_load_detail(text: str) -> tuple[str, str] | None:
     m = re.search(r"exit\s+load[^.\n]{0,120}?(\d+(?:\.\d+)?)(?:\s*%|\s*percent)?", t, re.IGNORECASE)
     if m:
         return (f"{m.group(1)}%", "")
+    # Label:value tables (Groww) — exit load on its own line
+    m = re.search(
+        r"(?:^|\n)\s*exit\s+load\s*[:\-]\s*(nil|n\.a\.|n\/a|[\d.]+\s*%?)\s*(?:\n|$)",
+        t,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    if m:
+        raw = m.group(1).strip().lower()
+        if raw.rstrip("%") in {"nil", "n.a.", "n/a"} or raw.startswith("nil"):
+            return ("Nil", "")
+        if "%" in m.group(1):
+            return (m.group(1).strip(), "")
+        return (f"{m.group(1).strip()}%", "")
     return None
 
 
 def _extract_expense_ratio_pct_match(text: str) -> re.Match[str] | None:
+    """Match TER / expense ratio percentages in noisy Groww-style text."""
     for pat in (
-        r"expense\s+ratio[^.\n]{0,100}?(\d+(?:\.\d+)?)\s*%",
-        r"(?:total\s+expense\s+ratio|\bter\b)[^.\n]{0,100}?(\d+(?:\.\d+)?)\s*%",
+        r"expense\s+ratio[^.\n]{0,140}?(\d+(?:\.\d+)?)\s*%",
+        r"(?:total\s+expense\s+ratio|\bter\b)[^.\n]{0,140}?(\d+(?:\.\d+)?)\s*%",
+        r"(?:total\s+expense|annual\s+recurring)[^\d]{0,80}?(\d+(?:\.\d+)?)\s*%",
+        r"(?:\bter\b|total\s+expense\s+ratio)\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*%",
     ):
-        m = re.search(pat, text, re.IGNORECASE)
+        m = re.search(pat, text, re.IGNORECASE | re.DOTALL)
         if m:
             return m
     return None
@@ -186,12 +204,16 @@ def _format_sources(urls: list[str]) -> str:
     return "Sources:\n" + "\n".join(f"- {u}" for u in top)
 
 
+def _cache_key(query: str) -> str:
+    return f"{_FAQ_CACHE_PREFIX}{query.strip().lower()}"
+
+
 def _cache_get(query: str) -> tuple[str, list[str]] | None:
-    return _FAQ_ANSWER_CACHE.get(query.strip().lower())
+    return _FAQ_ANSWER_CACHE.get(_cache_key(query))
 
 
 def _cache_set(query: str, answer: str, sources: list[str]) -> None:
-    key = query.strip().lower()
+    key = _cache_key(query)
     if not key:
         return
     if len(_FAQ_ANSWER_CACHE) >= _FAQ_CACHE_MAX:
@@ -213,6 +235,10 @@ def _compact(text: str, *, max_len: int = 220) -> str:
     if len(t) <= max_len:
         return t
     cut = t[:max_len].rstrip()
+    # Avoid ending mid-URL (e.g. "https://groww.") when trimming for chat/TTS limits.
+    tail_http = re.search(r"https?://\S*$", cut)
+    if tail_http:
+        cut = cut[: tail_http.start()].rstrip(" ,;:-")
     m = re.search(r"[.!?](?!.*[.!?])", cut)
     if m:
         return cut[: m.end()].rstrip()
@@ -220,6 +246,94 @@ def _compact(text: str, *, max_len: int = 220) -> str:
     if " " in cut:
         cut = cut.rsplit(" ", 1)[0]
     return cut.rstrip(" ,;:-")
+
+
+def _index_fund_exit_load_fallback(
+    slug: str | None, fund_url: str | None, hits: list[dict[str, Any]]
+) -> tuple[str, list[str]] | None:
+    """When chunks omit a clean exit-load line, still answer index schemes without guessing a percentage."""
+    if not slug:
+        return None
+    fund = next((f for f in FUND_SOURCES if f.slug == slug), None)
+    if not fund:
+        return None
+    if "index" not in (fund.category or "").lower():
+        return None
+    answer = _two_sentences(
+        f"{fund.display_name} is an index-oriented scheme in our catalog; official pages usually show exit load as Nil "
+        "or not applicable for such funds. Please confirm the exact figure on the scheme page linked under Sources."
+    )
+    sources = _collect_sources(hits)
+    if fund_url and fund_url not in sources:
+        sources = [fund_url] + sources
+    return answer, sources[:2]
+
+
+def _prefer_slug_hits(hits: list[dict[str, Any]], slug: str | None) -> list[dict[str, Any]]:
+    if not slug:
+        return hits
+    pref = [h for h in hits if str(h.get("fund_slug") or "").strip() == slug]
+    return pref if pref else hits
+
+
+def _should_run_small_cap_basket_ter_comparison(query: str) -> bool:
+    ql = (query or "").lower()
+    if not expense_ratio_requested(query):
+        return False
+    if "small cap" not in ql:
+        return False
+    if any(k in ql for k in ("compare", "comparison", "versus", "difference", "between")):
+        return True
+    if "in your database" in ql or "in our database" in ql:
+        return True
+    return False
+
+
+def _deterministic_small_cap_expense_comparison(
+    session: Session, query: str
+) -> tuple[str, list[str]] | None:
+    """Compare TER across manifest Small Cap funds without relying on vector ranking."""
+    if not _should_run_small_cap_basket_ter_comparison(query):
+        return None
+    embedder = get_embedder()
+    small_caps = [f for f in FUND_SOURCES if f.category == "Small Cap"]
+    found: list[tuple[str, str, str]] = []
+    for fund in small_caps:
+        qh = f"{fund.display_name} expense ratio TER total expense direct plan"
+        hits = search_chunks(
+            session,
+            embedder,
+            qh,
+            top_k=10,
+            preferred_fund_slug=fund.slug,
+        )
+        slug_hits = [h for h in hits if str(h.get("fund_slug") or "").strip() == fund.slug]
+        scan = slug_hits if slug_hits else hits
+        blob = "\n".join(str(h.get("content", "")) for h in scan[:8])
+        m = _extract_expense_ratio_pct_match(blob)
+        if not m:
+            continue
+        pct_val = m.group(1)
+        src_url = fund.url
+        for h in scan:
+            u = str(h.get("source_url", "")).strip()
+            if u:
+                src_url = u
+                break
+        short_label = fund.display_name.replace(" Direct Growth", "").strip()
+        found.append((short_label, pct_val, src_url))
+    if len(found) < 2:
+        return None
+    facts = ", ".join(f"{lab}: {pct}%" for lab, pct, _ in found)
+    answer = _two_sentences(
+        f"From indexed sources, expense ratio comparison for small-cap schemes in our dataset is {facts}. "
+        "Lower expense ratio is generally more cost-efficient, all else equal."
+    )
+    sources: list[str] = []
+    for _, _, u in found:
+        if u and u not in sources:
+            sources.append(u)
+    return answer, sources[:3]
 
 
 def _two_sentences(text: str) -> str:
@@ -416,7 +530,7 @@ def _extraction_failure_message(query: str, fund_page_url: str | None) -> str:
         "I found related sources in our index, but could not pull an exact figure from the text snippets we have. "
     )
     if fund_page_url:
-        msg += f"You can double-check on the scheme page: {fund_page_url} "
+        msg += "Please open the official scheme page linked under Sources to verify the latest figure. "
     msg += (
         "Try the full official scheme name if unsure—for example "
         "“What is the exit load of UTI Nifty 50 Index Fund Direct Growth?”."
@@ -536,13 +650,15 @@ def _deterministic_faq_answer(session: Session, query: str) -> tuple[str, list[s
         or any(k in q for k in ["compare", "vs", "versus", "difference", "between"])
     ):
         return None
+
+    basket_cmp = _deterministic_small_cap_expense_comparison(session, query)
+    if basket_cmp:
+        return basket_cmp
+
     _slug, _fund_url = resolve_manifest_fund(query)
-    hits = _rerank_and_trim_hits(
-        query,
-        search_chunks(session, get_embedder(), query, top_k=8, preferred_fund_slug=_slug),
-        top_k=6,
-        preferred_fund_slug=_slug,
-    )
+    raw_hits = search_chunks(session, get_embedder(), query, top_k=8, preferred_fund_slug=_slug)
+    hits = _prefer_slug_hits(raw_hits, _slug)
+    hits = _rerank_and_trim_hits(query, hits, top_k=6, preferred_fund_slug=_slug)
     if not hits:
         return None
 
@@ -564,6 +680,18 @@ def _deterministic_faq_answer(session: Session, query: str) -> tuple[str, list[s
                 "Funds charge exit load to discourage short-term redemptions and maintain portfolio stability."
             )
             return answer, _collect_sources([h] + hits)
+        joined_el = "\n".join(str(h.get("content", "")) for h in hits[:10])
+        dj = _extract_exit_load_detail(joined_el)
+        if dj:
+            main, tail = dj
+            answer = _two_sentences(
+                f"The exit load is {main}{(' — ' + tail) if tail else ''}. "
+                "Funds charge exit load to discourage short-term redemptions and maintain portfolio stability."
+            )
+            return answer, _collect_sources(hits)
+        idx_fb = _index_fund_exit_load_fallback(_slug, _fund_url, hits)
+        if idx_fb:
+            return idx_fb
 
     elif fee_pri == "expense_ratio":
         for h in hits:
@@ -573,6 +701,12 @@ def _deterministic_faq_answer(session: Session, query: str) -> tuple[str, list[s
                 pct = m.group(1)
                 answer = _two_sentences(f"The expense ratio found in our indexed sources is {pct}%.")
                 return answer, _collect_sources([h] + hits)
+        joined = "\n".join(str(h.get("content", "")) for h in hits[:10])
+        mj = _extract_expense_ratio_pct_match(joined)
+        if mj:
+            pct = mj.group(1)
+            answer = _two_sentences(f"The expense ratio found in our indexed sources is {pct}%.")
+            return answer, _collect_sources(hits)
 
     elif "nav" in q:
         for h in hits:
@@ -897,6 +1031,10 @@ def answer_faq(session: Session, query: str) -> AgentResult:
 
         plan_slug, plan_url = resolve_manifest_fund(query)
         hits = _merge_hits(session, queries, preferred_fund_slug=plan_slug)
+        if plan_slug:
+            slug_only = [h for h in hits if str(h.get("fund_slug") or "").strip() == plan_slug]
+            if slug_only:
+                hits = slug_only
         traces.append(
             AgentTraceStep(
                 agent="rag_agent",
@@ -1001,7 +1139,10 @@ def answer_faq(session: Session, query: str) -> AgentResult:
 
     # --- Deterministic fallback (no LLM keys) ---
     fb_slug, fb_url = resolve_manifest_fund(query)
-    first_hits = search_chunks(session, get_embedder(), query, top_k=4, preferred_fund_slug=fb_slug)
+    first_hits = _prefer_slug_hits(
+        search_chunks(session, get_embedder(), query, top_k=4, preferred_fund_slug=fb_slug),
+        fb_slug,
+    )
     traces.append(
         AgentTraceStep(
             agent="rag_agent",
@@ -1016,12 +1157,15 @@ def answer_faq(session: Session, query: str) -> AgentResult:
     hits = first_hits
     replanned = False
     if best_score < 0.1 or len(first_hits) < 2:
-        hits = search_chunks(
-            session,
-            get_embedder(),
-            f"{query} expense ratio exit load nav",
-            top_k=5,
-            preferred_fund_slug=fb_slug,
+        hits = _prefer_slug_hits(
+            search_chunks(
+                session,
+                get_embedder(),
+                f"{query} expense ratio exit load nav",
+                top_k=5,
+                preferred_fund_slug=fb_slug,
+            ),
+            fb_slug,
         )
         replanned = True
         traces.append(

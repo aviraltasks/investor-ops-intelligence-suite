@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from app.sources.manifest import FUND_SOURCES
+from app.sources.manifest import FUND_SOURCES, FundSource
 
 _DISPLAY_SUFFIXES = (
     " fund direct growth",
@@ -36,6 +36,11 @@ _EXTRA_PHRASES: dict[str, tuple[str, ...]] = {
         "sbi nifty index fund",
         "sbi nifty index",
         "sbi nifty 50",
+        "sbi nifty index fund direct growth",
+    ),
+    "sbi-small-midcap-fund-direct-growth": (
+        "sbi small cap fund",
+        "sbi small cap",
     ),
     "parag-parikh-long-term-value-fund-direct-growth": (
         "parag parikh flexi cap",
