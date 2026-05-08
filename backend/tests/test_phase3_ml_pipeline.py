@@ -239,3 +239,25 @@ def test_llm_cluster_short_label_no_sleep_when_first_ok(monkeypatch) -> None:
     assert _llm_cluster_short_label(["kyc verification failed"]) == "First Try OK"
     assert len(calls) == 1
     assert sleeps == []
+
+
+def test_generate_pulse_spaces_llm_calls_between_clusters(monkeypatch, tmp_path) -> None:
+    db_file = tmp_path / "phase3_llm_spacing.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("EMBEDDING_MODEL", "hash")
+    reset_settings()
+    reset_engine()
+    init_db()
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(theme_pipeline_mod, "llm_available", lambda: True)
+    monkeypatch.setattr(theme_pipeline_mod, "_llm_cluster_short_label", lambda _texts: None)
+    monkeypatch.setattr(theme_pipeline_mod.time, "sleep", lambda s: sleeps.append(float(s)))
+
+    SessionLocal = get_session_factory()
+    with SessionLocal() as session:
+        _seed_reviews(session)
+        generate_pulse(session, sample_size=100)
+
+    # For 3 selected clusters, spacing runs before clusters 2 and 3.
+    assert sleeps == [4.0, 4.0]

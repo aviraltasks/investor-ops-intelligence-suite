@@ -551,9 +551,13 @@ def generate_pulse(session: Session, sample_size: int = 500) -> dict[str, Any]:
 
     themes: list[dict[str, Any]] = []
     llm_labels_applied_count = 0
-    for row in selected_rows:
+    llm_labeling_enabled = llm_available()
+    for idx, row in enumerate(selected_rows):
         label = row["label"]
-        alt = _llm_cluster_short_label(row["texts"])
+        # Groq free-tier rate limits bursty requests; space cluster label calls.
+        if llm_labeling_enabled and idx > 0:
+            time.sleep(4)
+        alt = _llm_cluster_short_label(row["texts"]) if llm_labeling_enabled else None
         if alt:
             label = alt
             llm_labels_applied_count += 1

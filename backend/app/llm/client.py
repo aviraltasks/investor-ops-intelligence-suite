@@ -40,14 +40,8 @@ def _gemini_model() -> str:
 
 
 def _candidate_gemini_models() -> list[str]:
-    primary = _gemini_model()
-    # Include safe fallbacks so a misconfigured model ID doesn't disable all LLM usage.
-    candidates = [
-        primary,
-        _DEFAULT_GEMINI_MODEL,
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-    ]
+    # Use env-driven model selection only; fallback default is handled by _gemini_model().
+    candidates = [_gemini_model()]
     out: list[str] = []
     seen: set[str] = set()
     for m in candidates:
