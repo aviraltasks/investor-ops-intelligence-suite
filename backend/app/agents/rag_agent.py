@@ -84,6 +84,13 @@ def _cache_set(query: str, answer: str, sources: list[str]) -> None:
     _FAQ_ANSWER_CACHE[key] = (answer, sources[:2])
 
 
+def clear_faq_answer_cache() -> int:
+    """Clear in-memory FAQ cache for current API process."""
+    n = len(_FAQ_ANSWER_CACHE)
+    _FAQ_ANSWER_CACHE.clear()
+    return n
+
+
 def _compact(text: str, *, max_len: int = 220) -> str:
     t = re.sub(r"\s+", " ", text or "").strip()
     if len(t) <= max_len:
@@ -417,6 +424,33 @@ def _deterministic_fund_only_prompt(query: str) -> tuple[str, list[str]] | None:
     return answer, []
 
 
+def _deterministic_out_of_scope_fund_answer(query: str) -> tuple[str, list[str]] | None:
+    q = (query or "").strip().lower()
+    if not q:
+        return None
+    if "fund" not in q and "elss" not in q:
+        return None
+    # If we already match a covered scheme, this is not out-of-scope.
+    if any(name and name in q for name in _FUND_NAME_KEYS):
+        return None
+    # Detect user asking for a specific named fund.
+    if not any(k in q for k in ("tell me about", "what about", "details", "info", "information", "explain")):
+        return None
+    m = re.search(r"(?:tell me about|what about|details of|info on|information on|explain)\s+(.+)", q)
+    if not m:
+        return None
+    requested = re.sub(r"[?.!,]+$", "", m.group(1)).strip()
+    if not requested:
+        return None
+    covered = [f.display_name for f in FUND_SOURCES]
+    preview = ", ".join(covered[:5])
+    answer = _two_sentences(
+        f"I do not have {requested.title()} in my current indexed database. "
+        f"I currently cover funds like {preview}. Ask 'which funds do you cover' to see the full list."
+    )
+    return answer, [f.url for f in FUND_SOURCES[:2]]
+
+
 def _deterministic_domain_clarifier(query: str) -> tuple[str, list[str]] | None:
     q = (query or "").strip().lower()
     if not q:
@@ -564,6 +598,24 @@ def answer_faq(session: Session, query: str) -> AgentResult:
                 tools=["faq.coverage_fast_path"],
                 replanned=False,
                 outcome="coverage_fast_path",
+            )
+        )
+        out = _compact(answer_body, max_len=220)
+        src_block = _format_sources(det_sources)
+        if src_block:
+            out = f"{out}\n\n{src_block}"
+        return AgentResult(response_text=out, payload={"sources": det_sources[:1], "confidence": "high"}, traces=traces)
+
+    out_of_scope = _deterministic_out_of_scope_fund_answer(query)
+    if out_of_scope:
+        answer_body, det_sources = out_of_scope
+        traces.append(
+            AgentTraceStep(
+                agent="rag_agent",
+                reasoning_brief="Detected named fund outside indexed corpus and returned explicit coverage boundary.",
+                tools=["faq.coverage_guard"],
+                replanned=False,
+                outcome="out_of_scope_fund",
             )
         )
         out = _compact(answer_body, max_len=220)

@@ -1177,16 +1177,5 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
         f"Please confirm booking: {topic} on {date_str} at {_time_plain_for_display(time_ist)} IST with Advisor {advisor_idx}. "
         "Reply yes or no."
     )
-    polished = _llm_polish_scheduling_reply(
-        user_message=message, draft=draft, payload=out_payload, action="book"
-    )
-    if polished != draft:
-        traces.append(
-            AgentTraceStep(
-                agent="scheduling_agent",
-                reasoning_brief="Polished booking confirmation prompt with LLM.",
-                tools=["llm.naturalize_scheduling_reply"],
-                outcome="llm_voice",
-            )
-        )
-    return AgentResult(response_text=polished, payload=out_payload, traces=traces)
+    # Keep booking confirmation deterministic for user trust and predictable yes/no flow.
+    return AgentResult(response_text=draft, payload=out_payload, traces=traces)

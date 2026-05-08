@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.agents.orchestrator import handle_chat_turn
 from app.agents.email_agent import draft_advisor_email
+from app.agents.rag_agent import clear_faq_answer_cache
 from app.config import get_google_doc_id, get_google_integrations_mode
 from app.db.models import (
     AgentActivityLog,
@@ -32,6 +33,7 @@ from app.db.session import get_session_factory, init_db
 from app.integrations.google_doc_append import append_plain_text_to_google_doc
 from app.integrations.service import send_booking_email_smtp, send_pulse_email_smtp
 from app.ml.theme_pipeline import generate_pulse, get_latest_pulse, list_pulse_history
+from app.pii_guard import contains_pii
 from app.rag.embed import get_embedder
 from app.rag.ingest_pipeline import rag_stats, run_full_ingest
 from app.rag.search import search_chunks
@@ -355,6 +357,23 @@ def chat(req: ChatRequest) -> ChatResponse:
     req.message = (req.message or "").strip()[:2000]
     req.user_name = (req.user_name or "User").strip()[:128]
     req.session_id = (req.session_id or "default-session").strip()[:128]
+    if contains_pii(req.message):
+        return ChatResponse(
+            response=(
+                "For your security, please do not share personal details like Aadhaar, PAN, phone, or email here. "
+                "For account-specific help, please use the secure booking page."
+            ),
+            traces=[
+                {
+                    "agent": "orchestrator",
+                    "reasoning_brief": "Blocked message at API boundary because sensitive personal information was detected.",
+                    "tools": ["chat.pii_precheck", "secure_page_redirect"],
+                    "replanned": False,
+                    "outcome": "pii_blocked_pre_agent",
+                }
+            ],
+            payload={"intents": ["safety"], "safe_redirect": "/secure/[bookingCode]"},
+        )
     try:
         with _db() as session:
             result = handle_chat_turn(session, req.session_id, req.user_name, req.message)
@@ -429,6 +448,17 @@ def admin_append_pulse_to_google_doc() -> dict[str, Any]:
         return {"ok": False, "message": "no pulse generated"}
     text = _format_pulse_for_doc(latest)
     return append_plain_text_to_google_doc(doc_id, text)
+
+
+@app.post("/api/admin/cache/faq/clear")
+def admin_clear_faq_cache() -> dict[str, Any]:
+    cleared = clear_faq_answer_cache()
+    return {
+        "ok": True,
+        "cleared_entries": cleared,
+        "scope": "current_process",
+        "note": "FAQ cache is in-memory per API process. Restarting the service also clears it.",
+    }
 
 
 @app.get("/api/admin/bookings")

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 from sqlalchemy import delete, desc, select
@@ -11,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Booking, MemoryFact
 from app.agents.types import AgentTraceStep
+from app.pii_guard import scrub_pii
 
 PENDING_SCHEDULE_CONFIRM_KEY = "pending_schedule_confirm"
 PENDING_SCHEDULING_CLARIFY_KEY = "pending_scheduling_clarify"
@@ -18,17 +18,6 @@ PENDING_SCHEDULING_CLARIFY_KEY = "pending_scheduling_clarify"
 
 def _normalized_user_name(user_name: str) -> str:
     return (user_name or "").strip() or "User"
-
-
-def _scrub_pii(value: str) -> str:
-    cleaned = value
-    # Email addresses.
-    cleaned = re.sub(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", "[redacted-email]", cleaned)
-    # Indian and generic phone numbers.
-    cleaned = re.sub(r"(?:\+91[\s-]?)?[6-9]\d{9}\b", "[redacted-phone]", cleaned)
-    # PAN-like patterns.
-    cleaned = re.sub(r"\b[A-Z]{5}\d{4}[A-Z]\b", "[redacted-id]", cleaned, flags=re.IGNORECASE)
-    return cleaned.strip()
 
 
 def load_context(session: Session, session_id: str, user_name: str) -> tuple[dict, AgentTraceStep]:
@@ -163,7 +152,7 @@ def clear_pending_scheduling_clarify(session: Session, session_id: str) -> None:
 
 def save_fact(session: Session, session_id: str, user_name: str, key: str, value: str) -> AgentTraceStep:
     normalized_user = _normalized_user_name(user_name)
-    safe_value = _scrub_pii(value)
+    safe_value = scrub_pii(value)
     session.add(MemoryFact(session_id=session_id, user_name=normalized_user, key=key, value=safe_value))
     session.commit()
     return AgentTraceStep(

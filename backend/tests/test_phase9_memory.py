@@ -53,7 +53,7 @@ def test_memory_fact_pii_scrub(monkeypatch, tmp_path) -> None:
             session_id="pii-s1",
             user_name="Aviral",
         )
-        assert "cannot process personal details in chat" in out["response"]
+        assert "please do not share personal details" in out["response"].lower()
 
     SessionLocal = get_session_factory()
     with SessionLocal() as session:

@@ -29,6 +29,7 @@ from app.agents.scheduling_agent import (
 from app.agents.topic_routing import match_quick_support_topic_label, message_suggests_support_faq
 from app.agents.types import AgentResult, AgentTraceStep
 from app.llm.client import chat_completion_safe, llm_available, parse_json_object
+from app.pii_guard import contains_pii
 from app.scheduling.slot_resolution import message_looks_like_slot_refinement
 
 
@@ -70,14 +71,7 @@ def _classify_intents(message: str) -> list[str]:
 
 
 def _has_pii(text: str) -> bool:
-    t = text or ""
-    patterns = [
-        r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
-        r"(?:\+91[\s-]?)?[6-9]\d{9}\b",
-        r"\b[A-Z]{5}\d{4}[A-Z]\b",
-        r"\b\d{12}\b",
-    ]
-    return any(re.search(p, t, flags=re.IGNORECASE) for p in patterns)
+    return contains_pii(text)
 
 
 def _is_investment_advice_request(text: str) -> bool:
@@ -335,7 +329,8 @@ def handle_chat_turn(session: Session, session_id: str, user_name: str, message:
     if _has_pii(sanitized_message):
         return AgentResult(
             response_text=(
-                "I cannot process personal details in chat. Please use the secure booking page to share phone/email."
+                "For your security, please do not share personal details like Aadhaar, PAN, phone, or email here. "
+                "For account-specific help, please use the secure booking page."
             ),
             traces=[
                 *traces,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from app.agents import rag_agent
 from app.config import reset_settings
 from app.db.session import reset_engine
 from app.main import app
@@ -125,3 +126,24 @@ def test_subscribers_and_pulse_send(monkeypatch, tmp_path) -> None:
         assert sent.status_code == 200
         assert sent.json()["ok"] is True
         assert sent.json()["sent_count"] == 1
+
+
+def test_admin_can_clear_faq_cache(monkeypatch, tmp_path) -> None:
+    db_file = tmp_path / "phase8_cache_clear.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("EMBEDDING_MODEL", "hash")
+    reset_settings()
+    reset_engine()
+
+    with TestClient(app) as client:
+        rag_agent._cache_set("cache smoke key", "answer", ["https://example.com"])  # type: ignore[attr-defined]
+
+        cleared = client.post("/api/admin/cache/faq/clear")
+        assert cleared.status_code == 200
+        body = cleared.json()
+        assert body["ok"] is True
+        assert int(body["cleared_entries"]) >= 1
+
+        cleared_again = client.post("/api/admin/cache/faq/clear")
+        assert cleared_again.status_code == 200
+        assert int(cleared_again.json()["cleared_entries"]) == 0
