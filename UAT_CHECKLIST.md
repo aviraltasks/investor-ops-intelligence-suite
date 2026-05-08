@@ -2,6 +2,12 @@
 
 Use this sheet for one full pass after deploy. Mark each item Pass/Fail and add notes.
 
+## Latest Production Notes (May 9, 2026)
+
+- PII chat safety is hardened: Aadhaar/PAN/phone/email inputs are blocked with secure guidance before agent processing.
+- Booking confirmation wording is deterministic (no LLM paraphrase): `Please confirm booking: ... Reply yes or no.`
+- Cross-fund small-cap expense-ratio comparison remains a known data/retrieval gap on current corpus (backlog item).
+
 ## Environment
 
 - App URL:

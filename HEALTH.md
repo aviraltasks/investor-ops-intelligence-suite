@@ -1,7 +1,7 @@
 # HEALTH.md — Project Health Tracker
 
 **Purpose:** Quick-check system status. Cursor updates after each phase.  
-**Last updated:** Phase 12 — README, Demo & Submission
+**Last updated:** Post-submission hardening (May 9, 2026)
 
 ---
 
@@ -20,6 +20,8 @@
 | Gmail SMTP | ✅ Draft + admin send flow wired | Booking email preview/send endpoints available in admin (mock send status now; live SMTP cutover later) |
 | Google Doc | 🔧 Live when configured | `POST /api/admin/pulse/append-doc` appends latest pulse when `GOOGLE_INTEGRATIONS_MODE=live`, `GOOGLE_DOC_ID`, and service account have Docs edit access |
 | Voice (STT/TTS) | ✅ Implemented | `/chat` uses Web Speech API for STT/TTS with mic states and text fallback banner |
+| Chat safety (PII) | ✅ Hardened | PII now blocked at `/api/chat` boundary before agent routing/memory; Aadhaar/PAN/phone/email blocked with secure redirect guidance |
+| FAQ cache controls | ✅ Implemented | `POST /api/admin/cache/faq/clear` clears in-memory FAQ cache per API process |
 
 ---
 
@@ -96,6 +98,15 @@
 |------|-------|--------|
 | 2026-05-04 | Windows: project path contains `&` breaks default `next` / `npm` scripts that invoke `cmd` | Mitigated: `frontend/package.json` uses `node node_modules/next/dist/bin/next …`; use `npm install --ignore-scripts` if postinstall fails |
 | 2026-05-04 | Python 3.14 local env triggers heavier deprecation warnings in FastAPI/Starlette and UTC defaults | Non-blocking for Phase 2; tests pass; can clean in hardening phase |
+| 2026-05-09 | Database-wide small-cap expense-ratio comparison can return generic category text on production | Known data/retrieval gap: top chunks are category-page prose, not clean per-fund metric rows. Backlog: ingest/add chunk quality for individual fund metric pages. |
+
+---
+
+## Backlog (Next)
+
+- [ ] RAG corpus upgrade for cross-fund comparisons: ingest/refresh per-fund pages with explicit metric rows (expense ratio/NAV/exit load).
+- [x] UI safety alignment: replaced unsupported example query with production-validated query to avoid overpromising current corpus.
+- [x] Deterministic booking confirmations enforced (no LLM paraphrase) for predictable yes/no scheduling flow.
 
 ---
 
