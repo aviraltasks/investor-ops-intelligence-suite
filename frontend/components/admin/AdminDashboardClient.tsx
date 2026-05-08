@@ -16,6 +16,18 @@ type Booking = {
 
 type ThemePoint = { theme: string; volume: number };
 type SeriesPoint = { date?: string; topic?: string; count: number };
+type ChartPoint = { label: string; value: number; pctDisplay: string };
+
+/** Whole % when volume is healthy; one decimal when total counts are small (booking topics, sparse FAQs). */
+function formatPctShare(value: number, total: number): string {
+  if (total <= 0) return "0";
+  const raw = (value / total) * 100;
+  if (total < 25) {
+    const rounded = Math.round(raw * 10) / 10;
+    return Number.isInteger(rounded) ? String(Math.trunc(rounded)) : rounded.toFixed(1);
+  }
+  return String(Math.round(raw));
+}
 type AgentLog = {
   timestamp: string;
   user_name: string;
@@ -210,18 +222,45 @@ export function AdminDashboardClient() {
     }
   }
 
-  function card(title: string, points: Array<{ label: string; value: number }>) {
+  function buildChartPoints(raw: Array<{ label: string; value: number }>): { points: ChartPoint[]; total: number } {
+    const cleaned = raw
+      .filter((x) => x.label && Number.isFinite(x.value) && x.value > 0)
+      .map((x) => ({ label: x.label.trim(), value: x.value }));
+    const sorted = cleaned.sort((a, b) => (b.value !== a.value ? b.value - a.value : a.label.localeCompare(b.label)));
+    const total = sorted.reduce((acc, x) => acc + x.value, 0);
+    if (!sorted.length || total <= 0) return { points: [], total: 0 };
+
+    const top = sorted.slice(0, 7);
+    const remainder = sorted.slice(7);
+    const otherValue = remainder.reduce((acc, x) => acc + x.value, 0);
+    const merged = otherValue > 0 ? [...top, { label: "Other", value: otherValue }] : top;
+    return {
+      points: merged.map((x) => ({
+        label: x.label,
+        value: x.value,
+        pctDisplay: formatPctShare(x.value, total),
+      })),
+      total,
+    };
+  }
+
+  function card(title: string, points: ChartPoint[], total: number) {
     const max = Math.max(1, ...points.map((p) => p.value));
     return (
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+          <span className="text-[11px] text-slate-500">Total: {total}</span>
+        </div>
         <div className="mt-3 space-y-2">
           {points.length ? (
-            points.slice(0, 8).map((p, idx) => (
+            points.map((p, idx) => (
               <div key={`${p.label}-${idx}`} className="text-xs">
                 <div className="mb-1 flex justify-between text-slate-600">
                   <span className="truncate">{p.label}</span>
-                  <span>{p.value}</span>
+                  <span>
+                    {p.value} ({p.pctDisplay}%)
+                  </span>
                 </div>
                 <div className="h-2 rounded bg-slate-100">
                   <div
@@ -238,6 +277,27 @@ export function AdminDashboardClient() {
       </div>
     );
   }
+
+  const reviewThemeChart = useMemo(
+    () => buildChartPoints((analytics?.review_themes || []).map((x) => ({ label: x.theme, value: x.volume }))),
+    [analytics],
+  );
+  const appointmentsChart = useMemo(
+    () => buildChartPoints((analytics?.appointments_booked || []).map((x) => ({ label: x.date || "-", value: x.count }))),
+    [analytics],
+  );
+  const bookingTopicsChart = useMemo(
+    () => buildChartPoints((analytics?.booking_topics || []).map((x) => ({ label: x.topic || "-", value: x.count }))),
+    [analytics],
+  );
+  const faqTopicsChart = useMemo(
+    () => buildChartPoints((analytics?.faq_topics || []).map((x) => ({ label: x.topic || "-", value: x.count }))),
+    [analytics],
+  );
+
+  const topTheme = reviewThemeChart.points[0];
+  const topBookingTopic = bookingTopicsChart.points[0];
+  const topFaqTopic = faqTopicsChart.points[0];
 
   const verificationLinks = [
     {
@@ -346,23 +406,33 @@ export function AdminDashboardClient() {
                 CSV reflects the selected range ({range}) and current database aggregates.
               </p>
             </div>
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-indigo-700">Top Theme</p>
+                <p className="mt-1 text-sm text-indigo-900">
+                  {topTheme ? `${topTheme.label} (${topTheme.value}, ${topTheme.pctDisplay}%)` : "No data"}
+                </p>
+              </div>
+              <div className="rounded-xl border border-teal-100 bg-teal-50 p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-teal-700">Top Booking Topic</p>
+                <p className="mt-1 text-sm text-teal-900">
+                  {topBookingTopic
+                    ? `${topBookingTopic.label} (${topBookingTopic.value}, ${topBookingTopic.pctDisplay}%)`
+                    : "No data"}
+                </p>
+              </div>
+              <div className="rounded-xl border border-violet-100 bg-violet-50 p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-violet-700">Top FAQ Topic</p>
+                <p className="mt-1 text-sm text-violet-900">
+                  {topFaqTopic ? `${topFaqTopic.label} (${topFaqTopic.value}, ${topFaqTopic.pctDisplay}%)` : "No data"}
+                </p>
+              </div>
+            </div>
             <div className="grid gap-4 md:grid-cols-2">
-            {card(
-              "Play Store Review Themes",
-              (analytics?.review_themes || []).map((x) => ({ label: x.theme, value: x.volume })),
-            )}
-            {card(
-              "Appointments Booked",
-              (analytics?.appointments_booked || []).map((x) => ({ label: x.date || "-", value: x.count })),
-            )}
-            {card(
-              "Chat Booking Topics",
-              (analytics?.booking_topics || []).map((x) => ({ label: x.topic || "-", value: x.count })),
-            )}
-            {card(
-              "FAQ Question Topics",
-              (analytics?.faq_topics || []).map((x) => ({ label: x.topic || "-", value: x.count })),
-            )}
+            {card("Play Store Review Themes", reviewThemeChart.points, reviewThemeChart.total)}
+            {card("Appointments Booked", appointmentsChart.points, appointmentsChart.total)}
+            {card("Chat Booking Topics", bookingTopicsChart.points, bookingTopicsChart.total)}
+            {card("FAQ Question Topics", faqTopicsChart.points, faqTopicsChart.total)}
             </div>
           </div>
         )}
