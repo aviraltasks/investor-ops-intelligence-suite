@@ -229,7 +229,6 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [showDisclaimer, setShowDisclaimer] = useState(true);
-  const [showAgentPanel, setShowAgentPanel] = useState(true);
   const [traceTurnHistory, setTraceTurnHistory] = useState<TraceTurnBlock[]>([]);
   const [pendingTraceQuery, setPendingTraceQuery] = useState<string | null>(null);
   const [lastPayload, setLastPayload] = useState<ChatPayload | null>(null);
@@ -893,34 +892,39 @@ export function ChatClient({ initialName }: { initialName: string }) {
   }
 
   return (
-    <section className="mt-6 grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">
-      <aside className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-sm font-semibold text-slate-900">Covered Schemes</h2>
-        <ul className="mt-3 max-h-52 space-y-1 overflow-auto text-xs text-slate-600">
-          {COVERED_FUNDS.map((fund) => (
-            <li key={fund} className="flex items-start gap-2">
-              <span className="mt-1 h-1.5 w-1.5 rounded-full bg-indigo-500" />
-              <span>{fund}</span>
-            </li>
-          ))}
-        </ul>
+    <section className="mt-6 grid items-stretch gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">
+      <aside className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        {/* ~62.5% / 37.5% vertical split (5:3) — schemes get more room; each pane scrolls independently */}
+        <div className="flex min-h-0 flex-[5] flex-col">
+          <h2 className="shrink-0 text-sm font-semibold text-slate-900">Covered Schemes</h2>
+          <ul className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1 text-xs text-slate-600">
+            {COVERED_FUNDS.map((fund) => (
+              <li key={fund} className="flex items-start gap-2">
+                <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" />
+                <span>{fund}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
 
-        <h3 className="mt-4 text-sm font-semibold text-slate-900">Example Questions</h3>
-        <div className="mt-2 flex flex-col gap-2">
-          {EXAMPLE_QUESTIONS.map((q) => (
-            <button
-              key={q}
-              type="button"
-              onClick={() => void sendMessage(q)}
-              className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-left text-xs text-indigo-900 hover:bg-indigo-100"
-            >
-              {q}
-            </button>
-          ))}
+        <div className="mt-3 flex min-h-0 flex-[3] flex-col border-t border-slate-100 pt-3">
+          <h3 className="shrink-0 text-sm font-semibold text-slate-900">Example Questions</h3>
+          <div className="mt-2 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain pr-1">
+            {EXAMPLE_QUESTIONS.map((q) => (
+              <button
+                key={q}
+                type="button"
+                onClick={() => void sendMessage(q)}
+                className="shrink-0 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-left text-xs text-indigo-900 hover:bg-indigo-100"
+              >
+                {q}
+              </button>
+            ))}
+          </div>
         </div>
       </aside>
 
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="min-h-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         {showDisclaimer && (
           <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
             <div className="flex items-start justify-between gap-4">
@@ -1090,69 +1094,58 @@ export function ChatClient({ initialName }: { initialName: string }) {
         </form>
       </div>
 
-      <aside className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-slate-900">How Finn Is Helping</h2>
-          <button
-            type="button"
-            className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700"
-            onClick={() => setShowAgentPanel((v) => !v)}
-          >
-            {showAgentPanel ? "Hide" : "Show"}
-          </button>
+      <aside className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-3 shrink-0">
+          <h2 className="text-sm font-semibold text-slate-900">How Finn AI Agents Are Helping</h2>
         </div>
 
-        {showAgentPanel ? (
-          <div
-            ref={agentPanelScrollRef}
-            className="max-h-[min(70vh,520px)] space-y-0 overflow-y-auto overscroll-contain pr-1"
-          >
-            {isLoading && pendingTraceQuery && (
-              <div className="mb-4 border-b border-slate-200 pb-3">
-                <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Latest</p>
-                <p className="mt-1 line-clamp-3 text-xs text-slate-800">&ldquo;{pendingTraceQuery}&rdquo;</p>
-                <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50/80 px-2 py-2">
-                  <p className="text-xs font-semibold text-amber-900">Working…</p>
-                  <p className="text-[11px] text-amber-800">{processingText}</p>
-                </div>
+        <div
+          ref={agentPanelScrollRef}
+          className="min-h-0 flex-1 space-y-0 overflow-y-auto overscroll-contain pr-1"
+        >
+          {isLoading && pendingTraceQuery && (
+            <div className="mb-4 border-b border-slate-200 pb-3">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Latest</p>
+              <p className="mt-1 line-clamp-3 text-xs text-slate-800">&ldquo;{pendingTraceQuery}&rdquo;</p>
+              <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50/80 px-2 py-2">
+                <p className="text-xs font-semibold text-amber-900">Working…</p>
+                <p className="text-[11px] text-amber-800">{processingText}</p>
               </div>
-            )}
+            </div>
+          )}
 
-            {!isLoading && !traceTurnHistory.length && (
-              <p className="text-xs text-slate-500">
-                Ask a question to see the real agent trace from the API (reasoning, tools, outcomes).
-              </p>
-            )}
+          {!isLoading && !traceTurnHistory.length && (
+            <p className="text-xs text-slate-500">
+              Ask a question to see the real agent trace from the API (reasoning, tools, outcomes).
+            </p>
+          )}
 
-            {traceTurnHistory.map((block, blockIdx) => (
-              <div key={block.id} className={blockIdx > 0 ? "mt-4 border-t border-slate-200 pt-4" : ""}>
-                <div className="mb-2 flex items-baseline justify-between gap-2">
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                    {blockIdx === 0 ? "Latest turn" : "Earlier turn"}
-                  </p>
-                </div>
-                <p className="mb-2 line-clamp-4 text-xs font-medium text-slate-800">&ldquo;{block.userQuery}&rdquo;</p>
-                <div className="space-y-2">
-                  {block.traces.length ? (
-                    block.traces.map((t, idx) => renderTraceStepCard(t, `${block.id}-s${idx}`))
-                  ) : (
-                    <p className="text-xs text-slate-500">No trace steps returned for this message.</p>
-                  )}
-                </div>
-                {debugAgentTrace && blockIdx === 0 && lastPayload && Object.keys(lastPayload).length > 0 && (
-                  <details className="mt-2 rounded border border-slate-200 bg-slate-50 p-2 text-[11px]">
-                    <summary className="cursor-pointer font-medium text-slate-700">Payload (debug)</summary>
-                    <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-all text-slate-600">
-                      {JSON.stringify(lastPayload, null, 2)}
-                    </pre>
-                  </details>
+          {traceTurnHistory.map((block, blockIdx) => (
+            <div key={block.id} className={blockIdx > 0 ? "mt-4 border-t border-slate-200 pt-4" : ""}>
+              <div className="mb-2 flex items-baseline justify-between gap-2">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                  {blockIdx === 0 ? "Latest turn" : "Earlier turn"}
+                </p>
+              </div>
+              <p className="mb-2 line-clamp-4 text-xs font-medium text-slate-800">&ldquo;{block.userQuery}&rdquo;</p>
+              <div className="space-y-2">
+                {block.traces.length ? (
+                  block.traces.map((t, idx) => renderTraceStepCard(t, `${block.id}-s${idx}`))
+                ) : (
+                  <p className="text-xs text-slate-500">No trace steps returned for this message.</p>
                 )}
               </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-xs text-slate-500">Panel collapsed.</p>
-        )}
+              {debugAgentTrace && blockIdx === 0 && lastPayload && Object.keys(lastPayload).length > 0 && (
+                <details className="mt-2 rounded border border-slate-200 bg-slate-50 p-2 text-[11px]">
+                  <summary className="cursor-pointer font-medium text-slate-700">Payload (debug)</summary>
+                  <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-all text-slate-600">
+                    {JSON.stringify(lastPayload, null, 2)}
+                  </pre>
+                </details>
+              )}
+            </div>
+          ))}
+        </div>
       </aside>
     </section>
   );
