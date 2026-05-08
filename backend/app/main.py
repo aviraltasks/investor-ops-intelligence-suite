@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import os
 import re
 from datetime import datetime, timedelta
@@ -13,7 +14,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func, select
+from sqlalchemy import delete, desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.agents.orchestrator import handle_chat_turn
@@ -203,6 +204,27 @@ def _looks_like_bot_generated_text(message: str) -> bool:
     return any(m in t for m in bot_markers)
 
 
+# Topics are `_topic_from_message` (first ~4 words). Prefixes align with `_looks_like_bot_generated_text`.
+_BOT_ECHO_FAQ_TOPIC_PREFIXES: tuple[str, ...] = (
+    "i provide factual mutual",
+    "i do not provide",
+    "help schedule advisor appointments",
+    "mandatory advisor appointments",
+    "welcome back",
+    "quick reminder your booking",
+)
+
+
+def purge_bot_echo_faq_interaction_logs(session: Session) -> int:
+    """Remove historical FAQ rows logged before bot-echo guard (assistant copy pasted as user message)."""
+    stmt = delete(InteractionLog).where(
+        InteractionLog.intent == "faq",
+        or_(*(InteractionLog.topic.startswith(p) for p in _BOT_ECHO_FAQ_TOPIC_PREFIXES)),
+    )
+    result = session.execute(stmt)
+    return int(result.rowcount or 0)
+
+
 def _is_valid_india_phone(value: str) -> bool:
     digits = re.sub(r"\D", "", value)
     if digits.startswith("91") and len(digits) == 12:
@@ -311,6 +333,15 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+    log = logging.getLogger(__name__)
+    try:
+        with _db() as session:
+            removed = purge_bot_echo_faq_interaction_logs(session)
+            session.commit()
+        if removed > 0:
+            log.info("Purged %s bot-echo FAQ interaction_logs row(s)", removed)
+    except Exception:
+        log.exception("interaction_logs bot-echo purge failed (non-fatal)")
 
 
 def _db() -> Session:

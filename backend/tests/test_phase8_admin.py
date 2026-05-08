@@ -5,12 +5,13 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.agents import rag_agent
 from app.config import reset_settings
-from app.db.models import PulseRun, PulseTheme
+from app.db.models import InteractionLog, PulseRun, PulseTheme
 from app.db.session import get_session_factory, init_db, reset_engine
-from app.main import app
+from app.main import app, purge_bot_echo_faq_interaction_logs
 
 
 def _post_chat(client: TestClient, message: str, session_id: str = "admin-s1") -> dict:
@@ -129,6 +130,39 @@ def test_subscribers_and_pulse_send(monkeypatch, tmp_path) -> None:
         assert sent.status_code == 200
         assert sent.json()["ok"] is True
         assert sent.json()["sent_count"] == 1
+
+
+def test_purge_bot_echo_faq_interaction_logs(monkeypatch, tmp_path) -> None:
+    db_file = tmp_path / "phase8_bot_echo_purge.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("EMBEDDING_MODEL", "hash")
+    reset_settings()
+    reset_engine()
+    init_db()
+
+    SessionLocal = get_session_factory()
+    with SessionLocal() as session:
+        session.add_all(
+            [
+                InteractionLog(session_id="s1", intent="faq", topic="i provide factual mutual"),
+                InteractionLog(session_id="s2", intent="faq", topic="what is the exit"),
+                InteractionLog(session_id="s3", intent="scheduling", topic="i provide factual mutual"),
+            ]
+        )
+        session.commit()
+        removed = purge_bot_echo_faq_interaction_logs(session)
+        session.commit()
+        assert removed == 1
+
+    with SessionLocal() as session:
+        faq_topics = [
+            row.topic
+            for row in session.scalars(select(InteractionLog).where(InteractionLog.intent == "faq")).all()
+        ]
+        assert "i provide factual mutual" not in faq_topics
+        assert "what is the exit" in faq_topics
+        sched = session.scalars(select(InteractionLog).where(InteractionLog.intent == "scheduling")).first()
+        assert sched is not None and sched.topic == "i provide factual mutual"
 
 
 def test_admin_review_themes_reflect_latest_pulse_only(monkeypatch, tmp_path) -> None:
