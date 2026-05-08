@@ -953,10 +953,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
   return (
     <section className="mt-6 grid items-stretch gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">
       <aside className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        {/* ~62.5% / 37.5% vertical split (5:3) — schemes get more room; each pane scrolls independently */}
-        <div className="flex min-h-0 flex-[5] flex-col">
+        <div className="flex min-h-0 shrink-0 flex-col">
           <h2 className="shrink-0 text-sm font-semibold text-slate-900">Covered Schemes</h2>
-          <ul className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1 text-xs text-slate-600">
+          <ul className="mt-3 max-h-[min(38vh,20rem)] space-y-1 overflow-y-auto overscroll-contain pr-1 text-xs text-slate-600">
             {COVERED_FUNDS.map((fund) => (
               <li key={fund} className="flex items-start gap-2">
                 <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" />
@@ -966,7 +965,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
           </ul>
         </div>
 
-        <div className="mt-3 flex min-h-0 flex-[3] flex-col border-t border-slate-100 pt-3">
+        <div className="mt-3 flex min-h-0 flex-1 flex-col border-t border-slate-100 pt-3">
           <h3 className="shrink-0 text-sm font-semibold text-slate-900">Example Questions</h3>
           <div className="mt-2 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain pr-1">
             {EXAMPLE_QUESTIONS.map((q) => (

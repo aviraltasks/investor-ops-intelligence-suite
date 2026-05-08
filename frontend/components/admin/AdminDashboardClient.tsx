@@ -335,28 +335,15 @@ export function AdminDashboardClient() {
               key={id}
               type="button"
               onClick={() => setTab(id as typeof tab)}
-              className={`w-full rounded-lg px-3 py-2 text-left text-sm ${
-                tab === id ? "bg-indigo-100 text-indigo-900" : "text-slate-700 hover:bg-slate-100"
+              className={`w-full rounded-lg px-3 py-2 text-left text-sm transition-colors ${
+                tab === id
+                  ? "bg-indigo-600 font-semibold text-white shadow-md shadow-indigo-600/25"
+                  : "text-slate-700 hover:bg-slate-100"
               }`}
             >
               {label}
             </button>
           ))}
-        </div>
-        <div className="mt-4 rounded-md border border-slate-200 p-2 text-xs text-slate-600">
-          Date Range
-          <div className="mt-2 flex gap-2">
-            {(["day", "week", "month"] as const).map((r) => (
-              <button
-                key={r}
-                type="button"
-                onClick={() => setRange(r)}
-                className={`rounded px-2 py-1 ${range === r ? "bg-indigo-600 text-white" : "bg-slate-100"}`}
-              >
-                {r}
-              </button>
-            ))}
-          </div>
         </div>
       </aside>
 
@@ -426,6 +413,21 @@ export function AdminDashboardClient() {
                 <p className="mt-1 text-sm text-violet-900">
                   {topFaqTopic ? `${topFaqTopic.label} (${topFaqTopic.value}, ${topFaqTopic.pctDisplay}%)` : "No data"}
                 </p>
+              </div>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs font-semibold text-slate-800">Date range</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {(["day", "week", "month"] as const).map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => setRange(r)}
+                    className={`rounded px-2 py-1 text-xs capitalize ${range === r ? "bg-indigo-600 text-white" : "bg-white text-slate-700 ring-1 ring-slate-200"}`}
+                  >
+                    {r}
+                  </button>
+                ))}
               </div>
             </div>
             <div className="grid gap-4 md:grid-cols-2">

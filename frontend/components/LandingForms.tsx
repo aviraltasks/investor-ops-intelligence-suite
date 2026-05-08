@@ -46,7 +46,7 @@ export function LandingForms() {
         </h2>
         <p className="mt-1 text-sm text-slate-600">
           New here? Enter your first name — no account needed. Finn will greet
-          you on the chat page (Phase 5+).
+          you on the chat page.
         </p>
         <form onSubmit={onStartChat} className="mt-4 flex flex-col gap-3">
           <label className="text-sm font-medium text-slate-700" htmlFor="fn">

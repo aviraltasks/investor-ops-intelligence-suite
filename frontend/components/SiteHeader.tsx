@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 const nav = [
-  { href: "/chat", label: "Chat" },
+  { href: "/chat", label: "Customer Chat" },
   { href: "/admin", label: "Admin" },
   { href: "/subscribers", label: "Advisor" },
 ] as const;

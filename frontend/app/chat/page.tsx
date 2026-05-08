@@ -14,7 +14,7 @@ export default async function ChatPage({ searchParams }: Props) {
           Home
         </Link>
         <span className="mx-2">/</span>
-        <span>Chat</span>
+        <span>Customer Chat</span>
       </p>
       <h1 className="mt-3 text-2xl font-bold tracking-tight text-slate-900">
         Chat with Finn
