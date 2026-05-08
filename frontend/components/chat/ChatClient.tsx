@@ -80,7 +80,7 @@ const COVERED_FUNDS = [
 
 const EXAMPLE_QUESTIONS = [
   "What is the exit load for Mirae ELSS and why is it charged?",
-  "Compare expense ratios of small cap funds in your database",
+  "What is the exit load of SBI Nifty Index Fund Direct Growth?",
   "What is NAV and how is it calculated?",
   "Book an appointment for KYC tomorrow at 10 am",
   "Show available advisor slots this week",
