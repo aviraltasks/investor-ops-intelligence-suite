@@ -1,4 +1,5 @@
 const LINKEDIN = "https://www.linkedin.com/in/aviralrawat/";
+const GITHUB_REPO = "https://github.com/aviraltasks/investor-ops-intelligence-suite";
 
 export function SiteFooter() {
   return (
@@ -24,20 +25,36 @@ export function SiteFooter() {
 
         <details className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
           <summary className="cursor-pointer font-medium text-indigo-900">
-            System Design (Architecture)
+            About This Product
           </summary>
-          <p className="mt-3 text-slate-700">
-            Next.js (Vercel) talks to FastAPI (Render). Finn uses an agentic
-            backend: RAG over Groww + SEBI sources, ML theme detection on Play
-            Store reviews, IST scheduling with Google Calendar and Sheets, and
-            Gmail for advisor briefing emails. Durable state lives in
-            PostgreSQL; Google integrations use a swappable port layer. Full
-            diagrams, API contracts, and phase mapping:{" "}
-            <code className="rounded bg-white px-1 py-0.5 text-xs text-slate-800 ring-1 ring-slate-200">
-              ARCHITECTURE.md
-            </code>{" "}
-            in the repository root.
-          </p>
+          <div className="mt-3 space-y-3 text-slate-700">
+            <p>
+              An AI-native ops assistant for mutual fund platforms — built on a multi-agent architecture
+              where specialized agents (orchestrator, RAG, scheduling, review intelligence, memory) reason
+              and collaborate on every user query, with full transparency via the live agent activity panel.
+            </p>
+            <p>
+              <span className="font-medium text-slate-800">Key differentiators:</span> Agentic orchestration
+              with real-time reasoning traces. ML-powered theme detection (KMeans clustering + LLM labeling)
+              on Play Store reviews — not just LLM-only analysis. RAG over 30+ verified sources (Groww, SEBI)
+              with citation grounding. End-to-end Google Workspace integration (Calendar, Sheets, Gmail,
+              Docs).
+            </p>
+            <p className="text-slate-600">
+              Built by Aviral Rawat{" "}
+              <span className="text-slate-400" aria-hidden>
+                ·
+              </span>{" "}
+              <a
+                href={GITHUB_REPO}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-indigo-700 underline-offset-4 hover:underline"
+              >
+                View codebase &amp; architecture on GitHub
+              </a>
+            </p>
+          </div>
         </details>
       </div>
     </footer>
