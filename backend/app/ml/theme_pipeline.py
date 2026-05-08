@@ -8,6 +8,7 @@ from datetime import datetime
 import logging
 import math
 import re
+import time
 from typing import Any
 
 import numpy as np
@@ -441,26 +442,38 @@ def _deterministic_token_baseline_labels(texts: list[str]) -> list[str]:
 
 
 def _llm_cluster_short_label(cluster_texts: list[str]) -> str | None:
-    """Optional LLM theme title for a cluster (Groq/Gemini when configured)."""
+    """Optional LLM theme title for a cluster (Groq/Gemini when configured).
+
+    On failure or unparsable output, retries once after a short delay (max 2 attempts).
+    """
     if not llm_available() or not cluster_texts:
         logger.warning("Pulse LLM labeling skipped: unavailable_or_empty_cluster")
         return None
     messages = _build_llm_cluster_label_messages(cluster_texts)
-    res = chat_completion_safe(messages, temperature=0.2)
-    if res.provider == "none" or not res.text.strip():
-        logger.warning("Pulse LLM labeling failed: provider=%s error=%s", res.provider, res.error)
-        return None
-    label = _parse_llm_cluster_label(res.text)
-    if not label:
+    for attempt in range(2):
+        if attempt > 0:
+            time.sleep(2)
+        res = chat_completion_safe(messages, temperature=0.2)
+        if res.provider == "none" or not res.text.strip():
+            logger.warning(
+                "Pulse LLM labeling failed attempt=%s provider=%s error=%s",
+                attempt + 1,
+                res.provider,
+                res.error,
+            )
+            continue
+        label = _parse_llm_cluster_label(res.text)
+        if label:
+            return label
         snippet = re.sub(r"\s+", " ", res.text).strip()[:240]
         logger.warning(
-            "Pulse LLM labeling parse failure: provider=%s error=%s response_snippet=%s",
+            "Pulse LLM labeling parse failure attempt=%s provider=%s error=%s response_snippet=%s",
+            attempt + 1,
             res.provider,
             res.error,
             snippet,
         )
-        return None
-    return label
+    return None
 
 
 def _build_llm_cluster_label_messages(cluster_texts: list[str]) -> list[dict[str, str]]:
@@ -537,14 +550,16 @@ def generate_pulse(session: Session, sample_size: int = 500) -> dict[str, Any]:
     quality["theme_min_keywords"] = MIN_THEME_KEYWORDS
 
     themes: list[dict[str, Any]] = []
-    used_llm_labels = False
+    llm_labels_applied_count = 0
     for row in selected_rows:
         label = row["label"]
         alt = _llm_cluster_short_label(row["texts"])
         if alt:
             label = alt
-            used_llm_labels = True
+            llm_labels_applied_count += 1
         themes.append({"label": label, "volume": row["volume"], "quote": row["quote"]})
+
+    used_llm_labels = llm_labels_applied_count > 0
 
     actions = _build_actions(themes)
     analysis = _build_analysis(themes, len(texts))
@@ -562,6 +577,7 @@ def generate_pulse(session: Session, sample_size: int = 500) -> dict[str, Any]:
         "reproducibility_token_baseline": True,
         "token_cost_hint": cost_hint,
         "quality_gate": quality,
+        "llm_labels_applied_count": llm_labels_applied_count,
     }
     metrics = {
         "algorithm": "custom_kmeans_numpy",
@@ -570,6 +586,8 @@ def generate_pulse(session: Session, sample_size: int = 500) -> dict[str, Any]:
         "cluster_count": len(set(labels)),
         "silhouette": round(float(clustering.silhouette), 4),
         "quality_threshold_used": "usable_medium_or_high_only",
+        "llm_labels_applied_count": llm_labels_applied_count,
+        "llm_clusters_selected": len(selected_rows),
     }
 
     date_from = min((r.review_at for r in reviews if r.review_at), default=None)

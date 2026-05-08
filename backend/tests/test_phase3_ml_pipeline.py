@@ -7,8 +7,11 @@ from sqlalchemy import func, select
 from app.config import reset_settings
 from app.db.models import PulseRun, PulseTheme, Review
 from app.db.session import get_session_factory, init_db, reset_engine
+from app.llm.client import LLMResponse
+from app.ml import theme_pipeline as theme_pipeline_mod
 from app.ml.theme_pipeline import (
     _build_llm_cluster_label_messages,
+    _llm_cluster_short_label,
     _parse_llm_cluster_label,
     generate_pulse,
     get_latest_pulse,
@@ -66,6 +69,9 @@ def test_generate_pulse_persists_and_structures(monkeypatch, tmp_path) -> None:
         assert len(pulse["actions"]) == 3
         assert pulse["metrics"]["algorithm"] == "custom_kmeans_numpy"
         assert "silhouette" in pulse["metrics"]
+        assert pulse["metrics"]["llm_labels_applied_count"] == 0
+        assert pulse["comparison"]["llm_labels_applied_count"] == 0
+        assert pulse["metrics"]["llm_clusters_selected"] == 3
         assert len(pulse["analysis"].split()) < 250
 
         run_count = session.scalar(select(func.count()).select_from(PulseRun))
@@ -195,3 +201,41 @@ def test_llm_cluster_prompt_shape() -> None:
 def test_parse_llm_cluster_label_json_and_plain_text() -> None:
     assert _parse_llm_cluster_label('{"label":"Order Placement Failures"}') == "Order Placement Failures"
     assert _parse_llm_cluster_label("Order Placement Failures") == "Order Placement Failures"
+
+
+def test_llm_cluster_short_label_retries_once(monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_LLM_IN_PYTEST", "1")
+    monkeypatch.setenv("GROQ_API_KEY", "fake-test-key")
+    calls: list[int] = []
+    sleeps: list[float] = []
+
+    def fake_chat(messages: list[dict[str, str]], *, temperature: float = 0.25) -> LLMResponse:
+        calls.append(len(calls) + 1)
+        if len(calls) == 1:
+            return LLMResponse("", "none", "simulated_failure")
+        return LLMResponse('{"label":"Retry Success Title"}', "groq", "")
+
+    monkeypatch.setattr(theme_pipeline_mod, "chat_completion_safe", fake_chat)
+    monkeypatch.setattr(theme_pipeline_mod.time, "sleep", lambda s: sleeps.append(float(s)))
+
+    assert _llm_cluster_short_label(["withdrawal pending for several days"]) == "Retry Success Title"
+    assert calls == [1, 2]
+    assert sleeps == [2.0]
+
+
+def test_llm_cluster_short_label_no_sleep_when_first_ok(monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_LLM_IN_PYTEST", "1")
+    monkeypatch.setenv("GROQ_API_KEY", "fake-test-key")
+    calls: list[int] = []
+    sleeps: list[float] = []
+
+    def fake_chat(messages: list[dict[str, str]], *, temperature: float = 0.25) -> LLMResponse:
+        calls.append(1)
+        return LLMResponse('{"label":"First Try OK"}', "groq", "")
+
+    monkeypatch.setattr(theme_pipeline_mod, "chat_completion_safe", fake_chat)
+    monkeypatch.setattr(theme_pipeline_mod.time, "sleep", lambda s: sleeps.append(float(s)))
+
+    assert _llm_cluster_short_label(["kyc verification failed"]) == "First Try OK"
+    assert len(calls) == 1
+    assert sleeps == []

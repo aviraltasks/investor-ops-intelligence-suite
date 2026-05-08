@@ -32,8 +32,11 @@ def _groq_model() -> str:
     return os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
 
 
+_DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
+
+
 def _gemini_model() -> str:
-    return os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip()
+    return os.getenv("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL).strip()
 
 
 def _candidate_gemini_models() -> list[str]:
@@ -41,6 +44,7 @@ def _candidate_gemini_models() -> list[str]:
     # Include safe fallbacks so a misconfigured model ID doesn't disable all LLM usage.
     candidates = [
         primary,
+        _DEFAULT_GEMINI_MODEL,
         "gemini-2.0-flash",
         "gemini-1.5-flash",
     ]

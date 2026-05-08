@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.llm import client as llm_client
 from app.llm.client import parse_json_object
 
 
@@ -20,3 +21,8 @@ def test_parse_json_object_fenced() -> None:
 def test_parse_json_object_embedded() -> None:
     raw = 'Here you go: {"x": true} thanks'
     assert parse_json_object(raw) == {"x": True}
+
+
+def test_gemini_model_default_when_env_missing(monkeypatch) -> None:
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    assert llm_client._gemini_model() == "gemini-3.1-flash-lite-preview"
