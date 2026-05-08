@@ -128,6 +128,26 @@ def test_subscribers_and_pulse_send(monkeypatch, tmp_path) -> None:
         assert sent.json()["sent_count"] == 1
 
 
+def test_admin_faq_topics_skip_bot_echo_inputs(monkeypatch, tmp_path) -> None:
+    db_file = tmp_path / "phase8_faq_topics_guard.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("EMBEDDING_MODEL", "hash")
+    reset_settings()
+    reset_engine()
+
+    with TestClient(app) as client:
+        _post_chat(client, "What is the exit load for Mirae ELSS?", session_id="faq-guard-1")
+        _post_chat(
+            client,
+            "I provide factual mutual fund, SAP, and mandatory advisor appointments.",
+            session_id="faq-guard-1",
+        )
+        analytics = client.get("/api/admin/analytics?range=week")
+        assert analytics.status_code == 200
+        faq_topics = [str(x.get("topic") or "").lower() for x in analytics.json().get("faq_topics", [])]
+        assert all("i provide factual mutual" not in t for t in faq_topics)
+
+
 def test_admin_can_clear_faq_cache(monkeypatch, tmp_path) -> None:
     db_file = tmp_path / "phase8_cache_clear.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")

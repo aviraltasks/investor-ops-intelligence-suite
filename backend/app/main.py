@@ -178,6 +178,21 @@ def _topic_from_message(message: str) -> str:
     return " ".join(words[:4]).lower()
 
 
+def _looks_like_bot_generated_text(message: str) -> bool:
+    t = re.sub(r"\s+", " ", (message or "").lower()).strip()
+    if not t:
+        return False
+    bot_markers = (
+        "i provide factual mutual fund",
+        "i do not provide investment advice",
+        "help schedule advisor appointments",
+        "mandatory advisor appointments",
+        "welcome back",
+        "quick reminder: your booking",
+    )
+    return any(m in t for m in bot_markers)
+
+
 def _is_valid_india_phone(value: str) -> bool:
     digits = re.sub(r"\D", "", value)
     if digits.startswith("91") and len(digits) == 12:
@@ -197,13 +212,18 @@ def _log_chat_artifacts(session: Session, req: ChatRequest, result: Any) -> None
     intents = result.payload.get("intents", []) if isinstance(result.payload, dict) else []
     if not intents:
         intents = ["general"]
+    topic = str(result.payload.get("topic") or _topic_from_message(req.message))
+    is_bot_echo = _looks_like_bot_generated_text(req.message)
     for intent in intents:
+        # Skip FAQ-topic analytics for bot-echoed assistant text captured as user input.
+        if str(intent) == "faq" and is_bot_echo:
+            continue
         session.add(
             InteractionLog(
                 session_id=req.session_id,
                 user_name=req.user_name,
                 intent=str(intent),
-                topic=str(result.payload.get("topic") or _topic_from_message(req.message)),
+                topic=topic,
             )
         )
     for t in result.traces:

@@ -151,6 +151,18 @@ class LiveSheetsAdapter:
                 )
 
             svc = build("sheets", "v4", credentials=creds, cache_discovery=False)
+            headers = [
+                "Code",
+                "Name",
+                "Topic",
+                "Date",
+                "Time",
+                "Advisor",
+                "Status",
+                "Timestamp",
+                "Secure URL",
+                "Email Status",
+            ]
             row = [
                 booking.booking_code,
                 booking.customer_name,
@@ -162,11 +174,24 @@ class LiveSheetsAdapter:
                 datetime.utcnow().isoformat(timespec="seconds"),
                 f"/secure/{booking.booking_code}",
                 booking.email_status,
-                "",
-                "",
             ]
+            # Ensure header row exists once for reviewer-friendly sheet readability.
+            head = (
+                svc.spreadsheets()
+                .values()
+                .get(spreadsheetId=self.sheet_id, range="A1:J1")
+                .execute()
+            )
+            first_row = (head.get("values") or [[]])[0]
+            if not first_row or not any(str(c).strip() for c in first_row):
+                svc.spreadsheets().values().update(
+                    spreadsheetId=self.sheet_id,
+                    range="A1:J1",
+                    valueInputOption="USER_ENTERED",
+                    body={"values": [headers]},
+                ).execute()
             # Prefer explicit tab range; fallback to plain A:L for existing sheets.
-            preferred_range = os.getenv("GOOGLE_SHEET_RANGE", "Bookings!A:L").strip() or "Bookings!A:L"
+            preferred_range = os.getenv("GOOGLE_SHEET_RANGE", "Bookings!A:J").strip() or "Bookings!A:J"
             try:
                 svc.spreadsheets().values().append(
                     spreadsheetId=self.sheet_id,
@@ -177,7 +202,7 @@ class LiveSheetsAdapter:
             except Exception:
                 svc.spreadsheets().values().append(
                     spreadsheetId=self.sheet_id,
-                    range="A:L",
+                    range="A:J",
                     valueInputOption="USER_ENTERED",
                     body={"values": [row]},
                 ).execute()

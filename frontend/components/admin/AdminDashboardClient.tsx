@@ -48,6 +48,10 @@ export function AdminDashboardClient() {
     () => process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000",
     [],
   );
+  const googleSheetId = (process.env.NEXT_PUBLIC_GOOGLE_SHEET_ID || "").trim();
+  const googleDocId = (process.env.NEXT_PUBLIC_GOOGLE_DOC_ID || "").trim();
+  const googleCalendarId = (process.env.NEXT_PUBLIC_GOOGLE_CALENDAR_ID || "").trim();
+  const googleCalendarEmbedUrl = (process.env.NEXT_PUBLIC_GOOGLE_CALENDAR_EMBED_URL || "").trim();
   const [tab, setTab] = useState<"dashboard" | "pulse" | "bookings" | "agentlog">("dashboard");
   const [range, setRange] = useState<"day" | "week" | "month">("week");
 
@@ -235,6 +239,28 @@ export function AdminDashboardClient() {
     );
   }
 
+  const verificationLinks = [
+    {
+      label: "Google Sheet (booking log)",
+      url: googleSheetId ? `https://docs.google.com/spreadsheets/d/${encodeURIComponent(googleSheetId)}/view?usp=sharing` : "",
+      configured: Boolean(googleSheetId),
+    },
+    {
+      label: "Google Doc (weekly pulse archive)",
+      url: googleDocId ? `https://docs.google.com/document/d/${encodeURIComponent(googleDocId)}/view?usp=sharing` : "",
+      configured: Boolean(googleDocId),
+    },
+    {
+      label: "Google Calendar",
+      url:
+        googleCalendarEmbedUrl ||
+        (googleCalendarId
+          ? `https://calendar.google.com/calendar/u/0/embed?src=${encodeURIComponent(googleCalendarId)}`
+          : ""),
+      configured: Boolean(googleCalendarEmbedUrl || googleCalendarId),
+    },
+  ];
+
   return (
     <div className="mt-6 grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
       <aside className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
@@ -283,6 +309,31 @@ export function AdminDashboardClient() {
 
         {tab === "dashboard" && (
           <div className="space-y-4">
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h3 className="text-sm font-semibold text-slate-900">Integration Verification — Reviewer Links</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Read-only links for reviewers to verify live Google integrations.
+              </p>
+              <div className="mt-3 space-y-2">
+                {verificationLinks.map((item) => (
+                  <div key={item.label} className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-100 p-2">
+                    <span className="text-xs text-slate-700">{item.label}</span>
+                    {item.configured ? (
+                      <a
+                        href={item.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded bg-indigo-50 px-2 py-1 text-xs text-indigo-800 hover:bg-indigo-100"
+                      >
+                        Open
+                      </a>
+                    ) : (
+                      <span className="rounded bg-amber-100 px-2 py-1 text-xs text-amber-800">Not configured</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
