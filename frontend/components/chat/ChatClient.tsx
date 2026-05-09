@@ -399,6 +399,11 @@ export function ChatClient({ initialName }: { initialName: string }) {
   }, [messages, isLoading]);
 
   function requestStartListening(delayMs = 0) {
+    console.log("[VOICE-5] requestStartListening called, blocked by:", {
+      isLoading: isLoadingRef.current,
+      micState: micStateRef.current,
+      ttsInFlight: isTtsInFlight(ttsStateRef.current),
+    });
     if (!sttSupported || !recognitionRef.current) return;
     if (typeof document !== "undefined" && document.hidden) return;
     if (isTtsInFlight(ttsStateRef.current)) return;
@@ -409,6 +414,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
       try {
         voiceRestartAttemptsRef.current += 1;
         setVoiceBanner(null);
+        console.log("[VOICE-6] recognition.start() called");
         recognitionRef.current.start();
       } catch {
         setMicState("idle");
@@ -484,6 +490,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
           setMicState("idle");
           return;
         }
+        console.log("[VOICE-7] User speech captured:", transcript);
         autoListenQueuedRef.current = false;
         setMicState("processing");
         if (voiceModeStateRef.current === "listening") {
@@ -601,6 +608,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
     if (!ttsSupported || typeof window === "undefined") return;
     const cleanText = (text || "").replace(/\s+/g, " ").trim();
     if (!cleanText) return;
+    const autoListen = Boolean(opts?.autoListen);
+    console.log("[VOICE-2] speak() called with text:", text, "autoListen:", autoListen);
     ttsRetryRef.current = false;
     autoListenAfterSpeakRef.current = Boolean(opts?.autoListen);
     setTtsErrorDetail(null);
@@ -633,6 +642,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
     utterance.pitch = 1.02;
     utterance.volume = 1;
     utterance.onstart = () => {
+      console.log("[VOICE-3] utterance.onstart fired, voiceModeState:", voiceModeStateRef.current);
       if (speechStartTimeoutRef.current !== null) {
         window.clearTimeout(speechStartTimeoutRef.current);
         speechStartTimeoutRef.current = null;
@@ -652,6 +662,12 @@ export function ChatClient({ initialName }: { initialName: string }) {
       setVoiceBanner(null);
     };
     utterance.onend = () => {
+      console.log(
+        "[VOICE-4] utterance.onend fired, autoListenAfterSpeakRef:",
+        autoListenAfterSpeakRef.current,
+        "voiceModeState:",
+        voiceModeStateRef.current,
+      );
       setMicState("idle");
       setTtsState("ended");
       if (autoListenAfterSpeakRef.current) {
@@ -694,6 +710,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
         fallback.pitch = 1.02;
         fallback.volume = 1;
         fallback.onstart = () => {
+          console.log("[VOICE-3] utterance.onstart fired, voiceModeState:", voiceModeStateRef.current);
           if (speechStartTimeoutRef.current !== null) {
             window.clearTimeout(speechStartTimeoutRef.current);
             speechStartTimeoutRef.current = null;
@@ -708,6 +725,12 @@ export function ChatClient({ initialName }: { initialName: string }) {
           setVoiceBanner(null);
         };
         fallback.onend = () => {
+          console.log(
+            "[VOICE-4] utterance.onend fired, autoListenAfterSpeakRef:",
+            autoListenAfterSpeakRef.current,
+            "voiceModeState:",
+            voiceModeStateRef.current,
+          );
           setMicState("idle");
           setTtsState("ended");
           if (autoListenAfterSpeakRef.current) {
@@ -820,7 +843,14 @@ export function ChatClient({ initialName }: { initialName: string }) {
       setLastPayload(data.payload || null);
       // Hands-free voice mode: speak every assistant reply, then auto-listen.
       if (isVoiceActive(voiceModeStateRef.current) && ttsSupported) {
-        speak(voiceTtsText(data), { autoListen: true });
+        const responseText = voiceTtsText(data);
+        console.log(
+          "[VOICE-8] API response received, about to speak:",
+          responseText,
+          "voiceModeState:",
+          voiceModeStateRef.current,
+        );
+        speak(responseText, { autoListen: true });
       }
     } catch (e) {
       const msgText =
@@ -845,6 +875,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
         window.clearTimeout(autoListenWatchdogRef.current);
       }
       autoListenWatchdogRef.current = window.setTimeout(() => {
+        console.log("[VOICE-9] Auto-listen restart check, voiceModeState:", voiceModeStateRef.current);
         if (
           isVoiceActive(voiceModeStateRef.current) &&
           sttSupported &&
@@ -890,6 +921,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
   }
 
   function onEnableVoiceMode() {
+    console.log("[VOICE-1] Enable clicked, voiceModeState:", voiceModeState);
     hasUserInteractedRef.current = true;
     if (typeof window !== "undefined") {
       window.sessionStorage.setItem("finn_voice_mode_seen", "1");
