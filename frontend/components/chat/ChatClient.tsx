@@ -699,7 +699,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
     } else {
       utterance.lang = "en-US";
     }
-    utterance.rate = 0.95;
+    utterance.rate = 1.15;
     utterance.pitch = 1.02;
     utterance.volume = 1;
     utterance.onstart = () => {
@@ -767,7 +767,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
         ttsRetryRef.current = true;
         const fallback = new SpeechSynthesisUtterance(cleanText);
         fallback.lang = "en-US";
-        fallback.rate = 0.95;
+        fallback.rate = 1.15;
         fallback.pitch = 1.02;
         fallback.volume = 1;
         fallback.onstart = () => {
