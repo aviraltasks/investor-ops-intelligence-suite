@@ -154,6 +154,7 @@ function voiceModeHelperText(state: VoiceModeState, processingSlow: boolean): st
   if (state === "starting") return "Setting up voice session...";
   if (state === "speaking_welcome") return "Finn is speaking...";
   if (state === "listening") return "Listening...";
+  if (state === "listening_paused") return "Mic off — tap Mic when you are ready to speak.";
   if (state === "processing") return processingSlow ? "Still thinking, hang on..." : "Got it - thinking...";
   if (state === "speaking_reply") return "Finn is responding...";
   if (state === "error_fallback") return "Voice unavailable, continuing in text";
@@ -184,13 +185,34 @@ function normalizeForEcho(text: string): string {
     .trim();
 }
 
+/**
+ * True when the transcript is likely the mic picking up Finn's TTS (long overlap with what was just spoken).
+ * Short phrases that merely appear inside a long assistant reply (e.g. repeating a suggested line) are not treated as echo.
+ */
 function isLikelyTtsEcho(transcript: string, assistantTexts: string[]): boolean {
   const t = normalizeForEcho(transcript);
   if (!t || t.length < 12) return false;
   for (const src of assistantTexts) {
     const s = normalizeForEcho(src);
-    if (!s) continue;
-    if (s.includes(t) || t.includes(s.slice(0, Math.min(80, s.length)))) return true;
+    if (!s || s.length < 24) continue;
+
+    // Nearly recited a long prefix of the assistant message (classic first-sentence bleed).
+    const prefixLen = Math.min(120, s.length);
+    const prefix = s.slice(0, prefixLen);
+    if (prefix.length >= 36 && t.includes(prefix) && t.length >= prefix.length * 0.82) {
+      return true;
+    }
+
+    // Substantial chunk of the assistant text repeated back (not a short quoted option inside a long reply).
+    const minEchoChars = Math.max(48, Math.floor(s.length * 0.28));
+    if (s.includes(t) && t.length >= minEchoChars) {
+      return true;
+    }
+
+    // Short assistant reply: user echoed almost all of it.
+    if (s.length < 72 && t.length >= s.length * 0.82 && s.includes(t)) {
+      return true;
+    }
   }
   return false;
 }
@@ -434,7 +456,11 @@ export function ChatClient({ initialName }: { initialName: string }) {
   }
 
   function transitionVoice(event: Parameters<typeof nextVoiceModeState>[1]) {
-    setVoiceModeState((cur) => nextVoiceModeState(cur, event));
+    setVoiceModeState((cur) => {
+      const next = nextVoiceModeState(cur, event);
+      voiceModeStateRef.current = next;
+      return next;
+    });
   }
 
   function stopListening() {
@@ -476,6 +502,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
       recognition.onstart = () => {
         recognitionActiveRef.current = true;
         setMicState("listening");
+        if (voiceModeStateRef.current === "listening_paused") {
+          transitionVoice("LISTENING_STARTED");
+        }
       };
       recognition.onresult = (evt: SpeechRecognitionEventLike) => {
         const transcript = evt.results?.[0]?.[0]?.transcript?.trim();
@@ -657,7 +686,11 @@ export function ChatClient({ initialName }: { initialName: string }) {
         if (voiceModeStateRef.current === "starting" || !isVoiceActive(voiceModeStateRef.current)) {
           transitionVoice("WELCOME_SPEECH_STARTED");
         }
-      } else if (voiceModeStateRef.current === "processing" || voiceModeStateRef.current === "listening") {
+      } else if (
+        voiceModeStateRef.current === "processing" ||
+        voiceModeStateRef.current === "listening" ||
+        voiceModeStateRef.current === "listening_paused"
+      ) {
         transitionVoice("ASSISTANT_REPLY_STARTED");
       }
       setMicState("speaking");
@@ -718,6 +751,12 @@ export function ChatClient({ initialName }: { initialName: string }) {
             welcomeSpokenRef.current = true;
             welcomeSpeechPendingRef.current = false;
             autoWelcomeAttemptedRef.current = false;
+          } else if (
+            voiceModeStateRef.current === "processing" ||
+            voiceModeStateRef.current === "listening" ||
+            voiceModeStateRef.current === "listening_paused"
+          ) {
+            transitionVoice("ASSISTANT_REPLY_STARTED");
           }
           setMicState("speaking");
           setTtsState("started");
@@ -903,6 +942,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
       autoListenQueuedRef.current = false;
       stopListening();
       setMicState("idle");
+      if (voiceModeStateRef.current === "listening") {
+        transitionVoice("MIC_STOPPED");
+      }
       return;
     }
     autoListenQueuedRef.current = false;

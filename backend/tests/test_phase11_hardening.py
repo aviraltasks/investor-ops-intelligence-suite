@@ -204,6 +204,33 @@ def test_pii_never_echoed_in_next_turn(monkeypatch, tmp_path) -> None:
         assert "aadhaar" not in low
 
 
+def test_post_booking_same_slot_without_new_intent_is_suppressed(monkeypatch, tmp_path) -> None:
+    """handle_scheduling: after a fulfilled booking, bare slot text must not hit global conflict messaging."""
+    db_file = tmp_path / "phase11_post_book_idle.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("EMBEDDING_MODEL", "hash")
+    reset_settings()
+    reset_engine()
+
+    from app.agents.scheduling_agent import handle_scheduling
+    from app.db.session import get_session_factory
+
+    sid = "post-book-idle-1"
+    with TestClient(app) as client:
+        _chat(client, "Book KYC tomorrow at 10 am", session_id=sid)
+        _chat(client, "yes", session_id=sid)
+
+    sess = get_session_factory()()
+    try:
+        out = handle_scheduling(sess, sid, "Aviral", "tomorrow at 10 am IST")
+    finally:
+        sess.close()
+    low = out.response_text.lower()
+    assert out.payload.get("status") == "post_booking_idle"
+    assert "reschedule instead" not in low
+    assert "already confirmed" in low
+
+
 def test_cross_session_slot_conflict_is_blocked(monkeypatch, tmp_path) -> None:
     db_file = tmp_path / "phase11_cross_session_conflict.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")

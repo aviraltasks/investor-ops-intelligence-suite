@@ -13,9 +13,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.agents.memory_agent import (
+    clear_last_fulfilled_booking,
     clear_pending_schedule_confirm,
     clear_pending_scheduling_clarify,
+    get_last_fulfilled_booking,
     get_pending_schedule_confirm,
+    save_last_fulfilled_booking,
     save_pending_schedule_confirm,
     save_pending_scheduling_clarify,
 )
@@ -144,6 +147,43 @@ def booking_context_prefix_for_topic(topic: str) -> str:
         TOPICS[4]: "book nominee ",
     }
     return by_topic.get(t, "book slot ")
+
+
+def message_signals_new_scheduling_request(message: str) -> bool:
+    """User is explicitly starting or changing a scheduling action (vs. ambient slot-like text after a completed booking)."""
+    m = re.sub(r"\s+", " ", (message or "").lower()).strip()
+    if not m:
+        return False
+    if m.startswith("book") or m.startswith("cancel"):
+        return True
+    needles = (
+        " book ",
+        "booking",
+        "schedule",
+        "appointment",
+        "reschedule",
+        "cancel ",
+        "cancel my",
+        "waitlist",
+        "wait list",
+        "availability",
+        "available slot",
+        "advisor call",
+        "advisor session",
+        "meet with",
+        "another appointment",
+        "another booking",
+        "new appointment",
+        "new booking",
+        "different time",
+        "change the time",
+        "change my booking",
+        "move my",
+        "pick a ",
+        " slot ",
+        "join the waitlist",
+    )
+    return any(n in m for n in needles)
 
 
 def _time_plain_for_display(time_ist: str) -> str:
@@ -478,6 +518,17 @@ def _execute_confirmed_book(
     booking.integration_meta = sync
     session.commit()
     clear_pending_schedule_confirm(session, session_id)
+    save_last_fulfilled_booking(
+        session,
+        session_id,
+        user_name or "User",
+        {
+            "date": date_str,
+            "time_ist": time_ist,
+            "booking_code": code,
+            "kind": "book",
+        },
+    )
     traces.append(
         AgentTraceStep(
             agent="scheduling_agent",
@@ -558,6 +609,7 @@ def _execute_confirmed_cancel(
     booking.integration_meta = sync
     session.commit()
     clear_pending_schedule_confirm(session, session_id)
+    clear_last_fulfilled_booking(session, session_id)
     traces.append(
         AgentTraceStep(
             agent="scheduling_agent",
@@ -636,6 +688,17 @@ def _execute_confirmed_reschedule(
     booking.integration_meta = meta
     session.commit()
     clear_pending_schedule_confirm(session, session_id)
+    save_last_fulfilled_booking(
+        session,
+        session_id,
+        user_name or "User",
+        {
+            "date": date_str,
+            "time_ist": time_ist,
+            "booking_code": booking.booking_code,
+            "kind": "reschedule",
+        },
+    )
     traces.append(
         AgentTraceStep(
             agent="scheduling_agent",
@@ -1119,6 +1182,30 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
         )
     clear_pending_scheduling_clarify(session, session_id)
     date_str, time_ist = slot
+
+    last_done = get_last_fulfilled_booking(session, session_id)
+    if (
+        last_done
+        and str(last_done.get("date") or "") == date_str
+        and str(last_done.get("time_ist") or "") == time_ist
+        and not message_signals_new_scheduling_request(message)
+    ):
+        code_hint = str(last_done.get("booking_code") or "your booking")
+        return AgentResult(
+            response_text=(
+                f"That appointment time is already confirmed ({code_hint}). "
+                "Say **book** if you want to schedule another call, or ask me anything else."
+            ),
+            traces=[
+                AgentTraceStep(
+                    agent="scheduling_agent",
+                    reasoning_brief="Suppressed duplicate slot parse after fulfilled booking — no explicit new scheduling intent.",
+                    tools=["memory.last_fulfilled_booking", "intent.guard"],
+                    outcome="post_booking_slot_suppressed",
+                )
+            ],
+            payload={"status": "post_booking_idle", "booking_code": last_done.get("booking_code")},
+        )
 
     conflict = session.scalar(
         select(Booking)

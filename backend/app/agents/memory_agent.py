@@ -14,6 +14,7 @@ from app.pii_guard import scrub_pii
 
 PENDING_SCHEDULE_CONFIRM_KEY = "pending_schedule_confirm"
 PENDING_SCHEDULING_CLARIFY_KEY = "pending_scheduling_clarify"
+LAST_FULFILLED_BOOKING_KEY = "last_fulfilled_booking"
 
 
 def _normalized_user_name(user_name: str) -> str:
@@ -146,6 +147,44 @@ def save_pending_scheduling_clarify(session: Session, session_id: str, user_name
 def clear_pending_scheduling_clarify(session: Session, session_id: str) -> None:
     session.execute(
         delete(MemoryFact).where(MemoryFact.session_id == session_id).where(MemoryFact.key == PENDING_SCHEDULING_CLARIFY_KEY)
+    )
+    session.commit()
+
+
+def get_last_fulfilled_booking(session: Session, session_id: str) -> dict[str, Any] | None:
+    """Latest confirmed book/reschedule slot for this session (used to suppress accidental duplicate slot parses)."""
+    fact = session.scalar(
+        select(MemoryFact)
+        .where(MemoryFact.session_id == session_id)
+        .where(MemoryFact.key == LAST_FULFILLED_BOOKING_KEY)
+        .order_by(desc(MemoryFact.created_at))
+        .limit(1)
+    )
+    if not fact or not fact.value:
+        return None
+    try:
+        out = json.loads(fact.value)
+        return out if isinstance(out, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
+def save_last_fulfilled_booking(session: Session, session_id: str, user_name: str, payload: dict[str, Any]) -> None:
+    normalized_user = _normalized_user_name(user_name)
+    session.add(
+        MemoryFact(
+            session_id=session_id,
+            user_name=normalized_user,
+            key=LAST_FULFILLED_BOOKING_KEY,
+            value=json.dumps(payload),
+        )
+    )
+    session.commit()
+
+
+def clear_last_fulfilled_booking(session: Session, session_id: str) -> None:
+    session.execute(
+        delete(MemoryFact).where(MemoryFact.session_id == session_id).where(MemoryFact.key == LAST_FULFILLED_BOOKING_KEY)
     )
     session.commit()
 
