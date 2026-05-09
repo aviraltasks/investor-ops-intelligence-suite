@@ -330,6 +330,18 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const voiceModeStateRef = useRef<VoiceModeState>("off");
   const voiceRestartAttemptsRef = useRef(0);
   const processingSlowTimerRef = useRef<number | null>(null);
+  /** Kept current for handlers registered once in mount-only effects (avoids stale closures). */
+  const sttSupportedRef = useRef(false);
+  const ttsSupportedRef = useRef(false);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const welcomeTextRef = useRef("");
+  const initialNameRef = useRef(initialName);
+
+  welcomeTextRef.current = welcomeText;
+  messagesRef.current = messages;
+  sttSupportedRef.current = sttSupported;
+  ttsSupportedRef.current = ttsSupported;
+  initialNameRef.current = initialName;
 
   const backendBaseUrl = useMemo(
     () => process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000",
@@ -399,7 +411,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
   }, [messages, isLoading]);
 
   function requestStartListening(delayMs = 0) {
-    if (!sttSupported || !recognitionRef.current) return;
+    if (!sttSupportedRef.current || !recognitionRef.current) return;
     if (typeof document !== "undefined" && document.hidden) return;
     if (isTtsInFlight(ttsStateRef.current)) return;
     if (isLoadingRef.current || micStateRef.current === "processing" || micStateRef.current === "speaking") return;
@@ -472,8 +484,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
           return;
         }
         const assistantCandidates = [
-          welcomeText,
-          messages
+          welcomeTextRef.current,
+          messagesRef.current
             .slice()
             .reverse()
             .find((m) => m.role === "assistant")?.text || "",
@@ -554,7 +566,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
       if (!isVoiceActive(voiceModeStateRef.current)) return;
       if (autoWelcomeAttemptedRef.current && !welcomeSpokenRef.current && typeof window !== "undefined" && !window.speechSynthesis.speaking) {
         autoWelcomeAttemptedRef.current = false;
-        speak(welcomeText, { autoListen: true });
+        speak(welcomeTextRef.current, { autoListen: true });
         return;
       }
       if (firstInteraction) requestStartListening();
@@ -594,11 +606,12 @@ export function ChatClient({ initialName }: { initialName: string }) {
         window.speechSynthesis.onvoiceschanged = null;
       }
     };
+    // Recognition + one-shot window listeners must stay mounted once; read latest state via *Ref (e.g. sttSupportedRef, messagesRef).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function speak(text: string, opts?: { autoListen?: boolean }) {
-    if (!ttsSupported || typeof window === "undefined") return;
+    if (!ttsSupportedRef.current || typeof window === "undefined") return;
     const cleanText = (text || "").replace(/\s+/g, " ").trim();
     if (!cleanText) return;
     ttsRetryRef.current = false;
@@ -637,7 +650,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
         window.clearTimeout(speechStartTimeoutRef.current);
         speechStartTimeoutRef.current = null;
       }
-      if (cleanText === welcomeText) {
+      if (cleanText === welcomeTextRef.current) {
         welcomeSpokenRef.current = true;
         welcomeSpeechPendingRef.current = false;
         autoWelcomeAttemptedRef.current = false;
@@ -662,7 +675,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
         autoListenQueuedRef.current = true;
         requestStartListening(120);
       }
-      if (cleanText === welcomeText && voiceModeStateRef.current === "speaking_welcome") {
+      if (cleanText === welcomeTextRef.current && voiceModeStateRef.current === "speaking_welcome") {
         transitionVoice("WELCOME_SPEECH_ENDED");
       } else if (voiceModeStateRef.current === "speaking_reply") {
         transitionVoice("ASSISTANT_REPLY_ENDED");
@@ -701,7 +714,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
             window.clearTimeout(speechStartTimeoutRef.current);
             speechStartTimeoutRef.current = null;
           }
-          if (cleanText === welcomeText) {
+          if (cleanText === welcomeTextRef.current) {
             welcomeSpokenRef.current = true;
             welcomeSpeechPendingRef.current = false;
             autoWelcomeAttemptedRef.current = false;
@@ -720,7 +733,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
             autoListenQueuedRef.current = true;
             requestStartListening(120);
           }
-          if (cleanText === welcomeText && voiceModeStateRef.current === "speaking_welcome") {
+          if (cleanText === welcomeTextRef.current && voiceModeStateRef.current === "speaking_welcome") {
             transitionVoice("WELCOME_SPEECH_ENDED");
           } else if (voiceModeStateRef.current === "speaking_reply") {
             transitionVoice("ASSISTANT_REPLY_ENDED");
@@ -784,7 +797,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
 
   async function sendMessage(text: string) {
     const msg = text.trim();
-    if (!msg || isLoading) return;
+    if (!msg || isLoadingRef.current) return;
     hasUserInteractedRef.current = true;
     if (welcomeSpeechPendingRef.current) {
       welcomeSpeechPendingRef.current = false;
@@ -792,6 +805,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
     setError(null);
     setMessages((prev) => [...prev, { role: "user", text: msg }]);
     setInput("");
+    isLoadingRef.current = true;
     setIsLoading(true);
     setPendingTraceQuery(msg);
     if (voiceModeStateRef.current === "listening") {
@@ -803,8 +817,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: msg,
-          session_id: `web-${initialName.toLowerCase().replace(/\s+/g, "-")}`,
-          user_name: initialName,
+          session_id: `web-${initialNameRef.current.toLowerCase().replace(/\s+/g, "-")}`,
+          user_name: initialNameRef.current,
         }),
       });
       if (!res.ok) throw new Error(`Chat API failed (${res.status})`);
@@ -824,7 +838,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
       ]);
       setLastPayload(data.payload || null);
       // Hands-free voice mode: speak every assistant reply, then auto-listen.
-      if (isVoiceActive(voiceModeStateRef.current) && ttsSupported) {
+      if (isVoiceActive(voiceModeStateRef.current) && ttsSupportedRef.current) {
         speak(voiceTtsText(data), { autoListen: true });
       }
     } catch (e) {
@@ -843,6 +857,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
         setVoiceBanner("Voice unavailable, continuing in text");
       }
     } finally {
+      isLoadingRef.current = false;
       setIsLoading(false);
       setPendingTraceQuery(null);
       setMicState((cur) => (cur === "processing" ? "idle" : cur));
@@ -852,7 +867,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
       autoListenWatchdogRef.current = window.setTimeout(() => {
         if (
           isVoiceActive(voiceModeStateRef.current) &&
-          sttSupported &&
+          sttSupportedRef.current &&
           !recognitionActiveRef.current &&
           micStateRef.current === "idle" &&
           !isTtsInFlight(ttsStateRef.current)
