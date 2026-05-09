@@ -308,7 +308,7 @@ function pickPreferredFemaleEnglishVoice(voices: SpeechSynthesisVoice[]): Speech
 }
 
 export function ChatClient({ initialName }: { initialName: string }) {
-  const welcomeText = `Hi ${initialName}! I provide factual mutual fund information and help schedule advisor appointments. I do not provide investment advice or handle personal account details in this chat.`;
+  const welcomeText = `Hi ${initialName}! I'm Finn, your mutual fund assistant. I can answer questions about 15 schemes in my database, help you book advisor appointments, and share what users are saying on the Play Store. What would you like to know?`;
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "assistant",
@@ -1089,6 +1089,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
             {voiceModeHelperText(voiceModeState, voiceProcessingSlow) && (
               <p className="text-xs text-slate-600">{voiceModeHelperText(voiceModeState, voiceProcessingSlow)}</p>
             )}
+            <p className="mt-1 text-[11px] leading-snug text-slate-400">
+              Works best on Google Chrome desktop.
+            </p>
           </div>
           {!isVoiceActive(voiceModeState) ? (
             <button
