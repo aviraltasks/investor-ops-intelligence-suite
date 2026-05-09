@@ -117,18 +117,24 @@ function voiceTtsText(data: ChatApiResponse): string {
       return !l.startsWith("sources:") && !l.startsWith("- http") && !l.startsWith("http");
     })
     .join(" ");
-  const raw = cleaned
+  const rawFull = cleaned
     .replace(/https?:\/\/\S+/gi, "")
     .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 220);
+    .trim();
   const codeRaw = data.payload?.booking_code;
   const code = typeof codeRaw === "string" ? codeRaw.trim().toUpperCase() : "";
-  if (/^GRW-W-[A-Z0-9]{4}$/.test(code) || /^GRW-[A-Z0-9]{4}$/.test(code)) {
+  const hasValidCode = /^GRW-W-[A-Z0-9]{4}$/.test(code) || /^GRW-[A-Z0-9]{4}$/.test(code);
+  if (hasValidCode) {
+    const hay = rawFull.toUpperCase();
+    // Reply already states the code — avoid spelling it again and then re-reading the full line.
+    if (hay.includes(code) || hay.replace(/\s+/g, "").includes(code.replace(/-/g, ""))) {
+      return rawFull.slice(0, 420);
+    }
     const spelled = code.split("").join(" ");
+    const raw = rawFull.slice(0, 220);
     return `Your booking code is ${spelled}. ${raw}`.slice(0, 420);
   }
-  return raw;
+  return rawFull.slice(0, 220);
 }
 
 function inferProcessingText(input: string): string {
