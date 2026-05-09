@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import os
 import smtplib
@@ -22,6 +22,19 @@ def _calendar_event_summary(booking: Booking) -> str:
     if (booking.status or "").lower() == "waitlisted":
         return f"WAITLIST — {booking.advisor} — {booking.topic} — {booking.booking_code}"
     return f"Advisor Q&A - {booking.advisor} - {booking.topic} - {booking.booking_code}"
+
+
+def _booking_time_parts(time_ist: str) -> tuple[int, int]:
+    raw = (time_ist or "").replace("IST", "").strip()
+    try:
+        hh_str, mm_str = raw.split(":", 1)
+        hh = int(hh_str)
+        mm = int(mm_str)
+        if 0 <= hh <= 23 and 0 <= mm <= 59:
+            return hh, mm
+    except Exception:
+        pass
+    return 10, 0
 
 
 @dataclass
@@ -95,12 +108,14 @@ class LiveGoogleCalendarAdapter:
     def create_tentative_hold(self, booking: Booking) -> SyncResult:
         try:
             svc = self._service()
-            # Keep event simple for phase delivery reliability.
+            hh, mm = _booking_time_parts(booking.time_ist)
+            start_dt = datetime.fromisoformat(f"{booking.date}T{hh:02d}:{mm:02d}:00")
+            end_dt = start_dt + timedelta(minutes=30)
             event = {
                 "summary": _calendar_event_summary(booking),
                 "description": f"Auto-created tentative hold for {booking.customer_name}",
-                "start": {"dateTime": f"{booking.date}T10:00:00+05:30"},
-                "end": {"dateTime": f"{booking.date}T10:30:00+05:30"},
+                "start": {"dateTime": start_dt.strftime("%Y-%m-%dT%H:%M:%S+05:30")},
+                "end": {"dateTime": end_dt.strftime("%Y-%m-%dT%H:%M:%S+05:30")},
             }
             res = (
                 svc.events()
@@ -190,23 +205,62 @@ class LiveSheetsAdapter:
                     valueInputOption="USER_ENTERED",
                     body={"values": [headers]},
                 ).execute()
-            # Prefer explicit tab range; fallback to plain A:L for existing sheets.
             preferred_range = os.getenv("GOOGLE_SHEET_RANGE", "Bookings!A:J").strip() or "Bookings!A:J"
+            code_scan_range = "Bookings!A:A"
+            fallback_code_scan_range = "A:A"
+            target_row_idx: int | None = None
             try:
-                svc.spreadsheets().values().append(
-                    spreadsheetId=self.sheet_id,
-                    range=preferred_range,
-                    valueInputOption="USER_ENTERED",
-                    body={"values": [row]},
-                ).execute()
+                code_col = (
+                    svc.spreadsheets()
+                    .values()
+                    .get(spreadsheetId=self.sheet_id, range=code_scan_range)
+                    .execute()
+                )
             except Exception:
-                svc.spreadsheets().values().append(
-                    spreadsheetId=self.sheet_id,
-                    range="A:J",
-                    valueInputOption="USER_ENTERED",
-                    body={"values": [row]},
-                ).execute()
-            return SyncResult(ok=True, reference=f"row-{booking.booking_code}", detail="sheet append success")
+                code_col = (
+                    svc.spreadsheets()
+                    .values()
+                    .get(spreadsheetId=self.sheet_id, range=fallback_code_scan_range)
+                    .execute()
+                )
+            values = code_col.get("values") or []
+            for idx, row_vals in enumerate(values, start=1):
+                code_val = str((row_vals[0] if row_vals else "")).strip()
+                if code_val == booking.booking_code:
+                    target_row_idx = idx
+                    break
+            if target_row_idx is not None:
+                update_range = f"Bookings!A{target_row_idx}:J{target_row_idx}"
+                try:
+                    svc.spreadsheets().values().update(
+                        spreadsheetId=self.sheet_id,
+                        range=update_range,
+                        valueInputOption="USER_ENTERED",
+                        body={"values": [row]},
+                    ).execute()
+                except Exception:
+                    svc.spreadsheets().values().update(
+                        spreadsheetId=self.sheet_id,
+                        range=f"A{target_row_idx}:J{target_row_idx}",
+                        valueInputOption="USER_ENTERED",
+                        body={"values": [row]},
+                    ).execute()
+            else:
+                try:
+                    svc.spreadsheets().values().append(
+                        spreadsheetId=self.sheet_id,
+                        range=preferred_range,
+                        valueInputOption="USER_ENTERED",
+                        body={"values": [row]},
+                    ).execute()
+                except Exception:
+                    svc.spreadsheets().values().append(
+                        spreadsheetId=self.sheet_id,
+                        range="A:J",
+                        valueInputOption="USER_ENTERED",
+                        body={"values": [row]},
+                    ).execute()
+            return SyncResult(ok=True, reference=f"row-{booking.booking_code}", detail="sheet upsert success")
         except Exception as exc:  # noqa: BLE001
             return SyncResult(ok=False, detail=f"sheet sync failed: {exc}")
 
@@ -304,6 +358,12 @@ def sync_booking_cancelled(booking: Booking) -> dict:
     c = cal.cancel_hold(booking)
     s = sheets.upsert_booking_row(booking)
     return {"calendar": c.__dict__, "sheets": s.__dict__}
+
+
+def sync_booking_sheet(booking: Booking) -> dict:
+    _cal, sheets, _mail = build_integration_service()
+    s = sheets.upsert_booking_row(booking)
+    return {"sheets": s.__dict__}
 
 
 def send_booking_email_smtp(*, to_email: str, subject: str, body: str) -> SyncResult:

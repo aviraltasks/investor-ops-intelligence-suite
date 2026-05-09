@@ -61,3 +61,37 @@ def test_past_calendar_day() -> None:
     _, reason = resolve_booking_slot("10 am 5 may 2026", now=_NOW_FRI, max_days_ahead=120)
     assert reason == "past_time"
 
+
+def test_named_month_without_year_rolls_to_nearest_future() -> None:
+    slot, reason = resolve_booking_slot("26 May 10am", now=_NOW_FRI, max_days_ahead=120)
+    assert reason == "ok" and slot is not None
+    assert slot[0] == "2026-05-26"
+    assert slot[1] == "10:00 IST"
+
+
+def test_tomorrow_morning_maps_to_10_am() -> None:
+    slot, reason = resolve_booking_slot("tomorrow morning", now=_NOW_FRI, max_days_ahead=120)
+    assert reason == "ok" and slot is not None
+    assert slot[0] == "2026-05-11"
+    assert slot[1] == "10:00 IST"
+
+
+def test_morning_without_day_needs_date() -> None:
+    _, reason = resolve_booking_slot("morning", now=_NOW_FRI, max_days_ahead=120)
+    assert reason == "missing_date"
+
+
+def test_common_weekday_typos_are_tolerated() -> None:
+    cases = (
+        ("thurdfay 3pm", "2026-05-14"),
+        ("wedensday 3pm", "2026-05-13"),
+        ("moday 3pm", "2026-05-11"),
+        ("tueday 3pm", "2026-05-12"),
+        ("firday 3pm", "2026-05-08"),
+    )
+    for text, expected_date in cases:
+        slot, reason = resolve_booking_slot(text, now=_NOW_FRI, max_days_ahead=120)
+        assert reason == "ok" and slot is not None
+        assert slot[0] == expected_date
+        assert slot[1] == "15:00 IST"
+

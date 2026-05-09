@@ -64,6 +64,15 @@ def _normalize(text: str) -> str:
     t = text.lower()
     t = re.sub(r"\ba\.\s*m\.?\b", "am", t)
     t = re.sub(r"\bp\.\s*m\.?\b", "pm", t)
+    weekday_typo_map = {
+        "thurdfay": "thursday",
+        "wedensday": "wednesday",
+        "moday": "monday",
+        "tueday": "tuesday",
+        "firday": "friday",
+    }
+    for wrong, right in weekday_typo_map.items():
+        t = re.sub(rf"\b{re.escape(wrong)}\b", right, t)
     return t
 
 
@@ -154,6 +163,47 @@ def _try_parse_named_month_date(t: str) -> tuple[date | None, str]:
     return None, t
 
 
+def _next_named_month_day(day: int, month: int, now: datetime) -> date | None:
+    year = now.year
+    for _ in range(2):
+        try:
+            cand = date(year, month, day)
+        except ValueError:
+            return None
+        if cand >= now.date():
+            return cand
+        year += 1
+    return None
+
+
+def _try_parse_named_month_date_no_year(t: str, now: datetime) -> tuple[date | None, str]:
+    # 26 may / 26th may
+    m = re.search(r"\b(\d{1,2})(?:st|nd|rd|th)?[\s.,/-]+([a-z]{3,9})\b", t, flags=re.IGNORECASE)
+    if m:
+        day = int(m.group(1))
+        mon = _month_from_token(m.group(2))
+        if mon is None:
+            return None, t
+        out = _next_named_month_day(day, mon, now)
+        if out is None:
+            return None, t
+        span = m.span()
+        return out, t[: span[0]] + " " + t[span[1] :]
+    # may 26 / may 26th
+    m2 = re.search(r"\b([a-z]{3,9})[\s.,/-]+(\d{1,2})(?:st|nd|rd|th)?\b", t, flags=re.IGNORECASE)
+    if m2:
+        mon = _month_from_token(m2.group(1))
+        day = int(m2.group(2))
+        if mon is None:
+            return None, t
+        out = _next_named_month_day(day, mon, now)
+        if out is None:
+            return None, t
+        span = m2.span()
+        return out, t[: span[0]] + " " + t[span[1] :]
+    return None, t
+
+
 def _roll_to_weekday(d: date) -> date:
     while d.weekday() >= 5:
         d += timedelta(days=1)
@@ -192,6 +242,21 @@ def _parse_clock_from_fragment(work: str) -> tuple[int | None, int | None]:
     m2 = re.search(r"\b(\d{1,2})(:(\d{2}))?\b(?=\s*(?:ist\b|hrs|hours|o'clock)|\s*$)", t)
     if m2 and (m2.group(2) or "ist" in t):
         return int(m2.group(1)), int(m2.group(3) or 0)
+    return None, None
+
+
+def _parse_vague_time_hint(text: str) -> tuple[int | None, int | None]:
+    t = text.lower()
+    if "end of day" in t:
+        return 17, 0
+    if "after lunch" in t:
+        return 13, 0
+    if "morning" in t:
+        return 10, 0
+    if "afternoon" in t:
+        return 14, 0
+    if "evening" in t:
+        return 16, 0
     return None, None
 
 
@@ -257,10 +322,18 @@ def resolve_booking_slot(
         d_nm, work = _try_parse_named_month_date(work)
         if d_nm:
             anchor, has_named_date = d_nm, True
+    if anchor is None:
+        d_nm_no_year, work = _try_parse_named_month_date_no_year(work, now)
+        if d_nm_no_year:
+            anchor, has_named_date = d_nm_no_year, True
 
+    used_vague_time = False
     hh, mm = _parse_clock_from_fragment(work)
     if hh is None:
-        return None, "missing_time"
+        hh, mm = _parse_vague_time_hint(t)
+        if hh is None:
+            return None, "missing_time"
+        used_vague_time = True
 
     wd_match_date = _weekday_anchor(t, now, hh, mm)
 
@@ -291,6 +364,8 @@ def resolve_booking_slot(
     )
 
     dt = datetime(anchor.year, anchor.month, anchor.day, hh, mm)
+    if used_vague_time and not has_date_hint:
+        return None, "missing_date"
 
     if anchor < now.date():
         return None, "past_time"
@@ -336,5 +411,7 @@ def message_looks_like_slot_refinement(text: str) -> bool:
     if any(re.search(rf"\b{re.escape(w)}\b", t) for w, _ in _WEEKDAY_NAMES if len(w) > 3) and re.search(
         r"\d{1,2}\s*(am|pm|:)", t
     ):
+        return True
+    if any(k in t for k in ("morning", "afternoon", "evening", "after lunch", "end of day")):
         return True
     return False

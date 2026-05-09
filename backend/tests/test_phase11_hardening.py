@@ -202,3 +202,45 @@ def test_pii_never_echoed_in_next_turn(monkeypatch, tmp_path) -> None:
         low = hi["response"].lower()
         assert "1234-5678-9012" not in low
         assert "aadhaar" not in low
+
+
+def test_cross_session_slot_conflict_is_blocked(monkeypatch, tmp_path) -> None:
+    db_file = tmp_path / "phase11_cross_session_conflict.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("EMBEDDING_MODEL", "hash")
+    reset_settings()
+    reset_engine()
+
+    with TestClient(app) as client:
+        _chat(client, "Book KYC tomorrow at 10 am", session_id="user-a")
+        first = _chat(client, "yes", session_id="user-a")
+        assert first["payload"].get("status") == "tentative"
+
+        second = _chat(client, "Book SIP tomorrow at 10 am", session_id="user-b")
+        low = second["response"].lower()
+        assert second["payload"].get("status") == "conflict"
+        assert "already have booking" in low or "already held" in low
+
+
+def test_faq_topic_buckets_for_admin_analytics(monkeypatch, tmp_path) -> None:
+    db_file = tmp_path / "phase11_faq_bucket.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file.as_posix()}")
+    monkeypatch.setenv("EMBEDDING_MODEL", "hash")
+    reset_settings()
+    reset_engine()
+
+    with TestClient(app) as client:
+        _chat(client, "What is the exit load for SBI Nifty Index Fund?", session_id="faq-b-1")
+        _chat(client, "Compare expense ratio and TER of small cap funds", session_id="faq-b-2")
+        _chat(client, "Please compare these two funds", session_id="faq-b-3")
+        _chat(client, "What is NAV?", session_id="faq-b-4")
+        _chat(client, "How does lock-in work in ELSS under 80C tax?", session_id="faq-b-5")
+        out = client.get("/api/admin/analytics?range=week")
+        assert out.status_code == 200
+        payload = out.json()
+        faq = {str(x.get("topic")): int(x.get("count") or 0) for x in payload.get("faq_topics", [])}
+        assert faq.get("Exit Load", 0) >= 1
+        assert faq.get("Expense Ratio", 0) >= 1
+        assert faq.get("Fund Comparison", 0) >= 1
+        assert faq.get("NAV", 0) >= 1
+        assert faq.get("Lock-in Period", 0) >= 1

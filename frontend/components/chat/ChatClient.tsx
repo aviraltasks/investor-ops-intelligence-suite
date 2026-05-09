@@ -195,6 +195,18 @@ function isLikelyTtsEcho(transcript: string, assistantTexts: string[]): boolean 
   return false;
 }
 
+function formatTimeIstForDisplay(timeIst: string): string {
+  const raw = (timeIst || "").replace(/\s*IST$/i, "").trim();
+  const m = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return timeIst;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return timeIst;
+  const suffix = hh < 12 ? "AM" : "PM";
+  const h12 = hh % 12 || 12;
+  return `${h12}:${String(mm).padStart(2, "0")} ${suffix} IST`;
+}
+
 let finnTtsVoicesLogged = false;
 
 function shouldLogFinnTtsVoices(): boolean {
@@ -1081,7 +1093,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
             </p>
             <p className="mt-1 font-mono text-base font-bold text-emerald-900">{bookingCode}</p>
             <p className="mt-1 text-emerald-900">
-              {String(lastPayload?.date || "—")} at {String(lastPayload?.time_ist || "—")}
+              {String(lastPayload?.date || "—")} at{" "}
+              {formatTimeIstForDisplay(String(lastPayload?.time_ist || "—"))}
             </p>
             <p className="text-emerald-900">
               {String(lastPayload?.topic || "—")} · {String(lastPayload?.advisor || "—")}

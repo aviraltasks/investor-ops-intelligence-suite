@@ -31,8 +31,8 @@ from app.db.models import (
     Subscriber,
 )
 from app.db.session import get_session_factory, init_db
-from app.integrations.google_doc_append import append_plain_text_to_google_doc
-from app.integrations.service import send_booking_email_smtp, send_pulse_email_smtp
+from app.integrations.google_doc_append import append_structured_pulse_to_google_doc
+from app.integrations.service import send_booking_email_smtp, send_pulse_email_smtp, sync_booking_sheet
 from app.ml.theme_pipeline import generate_pulse, get_latest_pulse, list_pulse_history
 from app.pii_guard import contains_pii
 from app.rag.embed import get_embedder
@@ -189,6 +189,27 @@ def _topic_from_message(message: str) -> str:
     return " ".join(words[:4]).lower()
 
 
+def _faq_topic_bucket(message: str) -> str:
+    t = (message or "").lower()
+    if "exit load" in t:
+        return "Exit Load"
+    if "expense ratio" in t or re.search(r"\bter\b", t):
+        return "Expense Ratio"
+    if re.search(r"\bnav\b", t):
+        return "NAV"
+    if re.search(r"\baum\b", t):
+        return "AUM"
+    if "lock-in" in t or "lockin" in t:
+        return "Lock-in Period"
+    if "tax" in t or "elss" in t or "80c" in t:
+        return "Tax & ELSS"
+    if "compare" in t:
+        return "Fund Comparison"
+    if "book" in t or "appointment" in t or "schedule" in t:
+        return "Booking"
+    return "General"
+
+
 def _looks_like_bot_generated_text(message: str) -> bool:
     t = re.sub(r"\s+", " ", (message or "").lower()).strip()
     if not t:
@@ -244,12 +265,13 @@ def _log_chat_artifacts(session: Session, req: ChatRequest, result: Any) -> None
     intents = result.payload.get("intents", []) if isinstance(result.payload, dict) else []
     if not intents:
         intents = ["general"]
-    topic = str(result.payload.get("topic") or _topic_from_message(req.message))
+    base_topic = str(result.payload.get("topic") or _topic_from_message(req.message))
     is_bot_echo = _looks_like_bot_generated_text(req.message)
     for intent in intents:
         # Skip FAQ-topic analytics for bot-echoed assistant text captured as user input.
         if str(intent) == "faq" and is_bot_echo:
             continue
+        topic = _faq_topic_bucket(req.message) if str(intent) == "faq" else base_topic
         session.add(
             InteractionLog(
                 session_id=req.session_id,
@@ -507,8 +529,7 @@ def admin_append_pulse_to_google_doc() -> dict[str, Any]:
         latest = get_latest_pulse(session)
     if latest is None:
         return {"ok": False, "message": "no pulse generated"}
-    text = _format_pulse_for_doc(latest)
-    return append_plain_text_to_google_doc(doc_id, text)
+    return append_structured_pulse_to_google_doc(doc_id, latest)
 
 
 @app.post("/api/admin/cache/faq/clear")
@@ -587,6 +608,8 @@ def admin_booking_email_send(booking_code: str, req: BookingEmailSendIn) -> dict
         meta["email_sent_to"] = req.to_email
         meta["email_send_detail"] = send_detail
         meta["email_send_mode"] = send_mode
+        sheet_sync = sync_booking_sheet(b)
+        meta["email_sheet_sync"] = sheet_sync
         b.integration_meta = meta
         session.commit()
     return {

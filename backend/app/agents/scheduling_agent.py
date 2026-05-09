@@ -148,7 +148,15 @@ def booking_context_prefix_for_topic(topic: str) -> str:
 
 def _time_plain_for_display(time_ist: str) -> str:
     s = (time_ist or "").strip()
-    return s[:-4].strip() if s.endswith(" IST") else s
+    raw = s[:-4].strip() if s.endswith(" IST") else s
+    m = re.match(r"^(\d{1,2}):(\d{2})$", raw)
+    if not m:
+        return raw
+    hh = int(m.group(1))
+    mm = int(m.group(2))
+    suffix = "AM" if hh < 12 else "PM"
+    hh12 = hh % 12 or 12
+    return f"{hh12}:{mm:02d} {suffix}"
 
 
 def _extract_time_ist(text: str) -> tuple[str, str] | None:
@@ -425,7 +433,6 @@ def _execute_confirmed_book(
 
     conflict = session.scalar(
         select(Booking)
-        .where(Booking.session_id == session_id)
         .where(Booking.date == date_str)
         .where(Booking.time_ist == time_ist)
         .where(Booking.status.in_(["tentative", "confirmed", "waitlisted"]))
@@ -597,7 +604,6 @@ def _execute_confirmed_reschedule(
         )
     conflict = session.scalar(
         select(Booking)
-        .where(Booking.session_id == session_id)
         .where(Booking.date == date_str)
         .where(Booking.time_ist == time_ist)
         .where(Booking.status.in_(["tentative", "confirmed", "waitlisted"]))
@@ -809,7 +815,7 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
         if booking.date == date_str and booking.time_ist == time_ist:
             return AgentResult(
                 response_text=(
-                    f"You're already scheduled for {date_str} at {time_ist} under {booking.booking_code}. "
+                    f"You're already scheduled for {date_str} at {_time_plain_for_display(time_ist)} IST under {booking.booking_code}. "
                     "Tell me a different weekday time if you want to move it."
                 ),
                 traces=[
@@ -825,7 +831,6 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
 
         conflict = session.scalar(
             select(Booking)
-            .where(Booking.session_id == session_id)
             .where(Booking.date == date_str)
             .where(Booking.time_ist == time_ist)
             .where(Booking.status.in_(["tentative", "confirmed", "waitlisted"]))
@@ -882,7 +887,7 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
             "previous_time_ist": old_time,
         }
         draft = (
-            f"Please confirm reschedule: {booking.booking_code} from {old_date} {old_time} IST "
+            f"Please confirm reschedule: {booking.booking_code} from {old_date} {_time_plain_for_display(old_time)} IST "
             f"to {date_str} {_time_plain_for_display(time_ist)} IST ({booking.topic}). Reply yes or no."
         )
         polished = _llm_polish_scheduling_reply(
@@ -1117,7 +1122,6 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
 
     conflict = session.scalar(
         select(Booking)
-        .where(Booking.session_id == session_id)
         .where(Booking.date == date_str)
         .where(Booking.time_ist == time_ist)
         .where(Booking.status.in_(["tentative", "confirmed", "waitlisted"]))

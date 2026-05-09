@@ -46,6 +46,18 @@ type PulsePreview = {
   actions: string[];
 };
 
+function formatTimeIstForDisplay(timeIst: string): string {
+  const raw = (timeIst || "").replace(/\s*IST$/i, "").trim();
+  const m = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return timeIst;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return timeIst;
+  const suffix = hh < 12 ? "AM" : "PM";
+  const h12 = hh % 12 || 12;
+  return `${h12}:${String(mm).padStart(2, "0")} ${suffix} IST`;
+}
+
 const AGENT_COLORS: Record<string, string> = {
   orchestrator: "bg-indigo-100 text-indigo-800",
   rag_agent: "bg-teal-100 text-teal-800",
@@ -298,6 +310,15 @@ export function AdminDashboardClient() {
   const topTheme = reviewThemeChart.points[0];
   const topBookingTopic = bookingTopicsChart.points[0];
   const topFaqTopic = faqTopicsChart.points[0];
+  const agentLogGroups = useMemo(() => {
+    const grouped: Record<string, AgentLog[]> = {};
+    for (const row of agentLogs) {
+      const key = row.agent || "unknown";
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(row);
+    }
+    return Object.entries(grouped).sort((a, b) => b[1].length - a[1].length);
+  }, [agentLogs]);
 
   const verificationLinks = [
     {
@@ -552,7 +573,7 @@ export function AdminDashboardClient() {
                       <td className="py-1 font-mono">{b.booking_code}</td>
                       <td className="py-1">{b.customer_name}</td>
                       <td className="py-1">{b.topic}</td>
-                      <td className="py-1">{b.date} {b.time_ist}</td>
+                      <td className="py-1">{b.date} {formatTimeIstForDisplay(b.time_ist)}</td>
                       <td className="py-1">{b.advisor}</td>
                       <td className="py-1">
                         <span className="rounded-full bg-slate-100 px-2 py-0.5">{b.status}</span>
@@ -592,23 +613,34 @@ export function AdminDashboardClient() {
         {tab === "agentlog" && (
           <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
             <h3 className="text-sm font-semibold text-slate-900">Agent Activity Log</h3>
-            <div className="mt-3 space-y-2">
-              {agentLogs.length ? (
-                agentLogs.map((a, idx) => (
-                  <div key={`${a.timestamp}-${idx}`} className="rounded-lg border border-slate-200 p-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span
-                        className={`rounded px-2 py-0.5 text-[11px] font-semibold ${AGENT_COLORS[a.agent] || "bg-slate-100 text-slate-700"}`}
-                      >
-                        {a.agent}
-                      </span>
-                      <span className="text-[11px] text-slate-500">{a.timestamp}</span>
-                    </div>
-                    <p className="mt-1 text-xs text-slate-700">{a.reasoning_brief}</p>
-                    <p className="mt-1 text-[11px] text-slate-500">User: {a.user_name} · Outcome: {a.outcome}</p>
-                    <p className="mt-1 text-[11px] text-slate-500">Query: {a.query_summary}</p>
-                  </div>
-                ))
+            <div className="mt-3">
+              {agentLogGroups.length ? (
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {agentLogGroups.map(([agent, rows]) => (
+                    <section key={agent} className="rounded-lg border border-slate-200 bg-slate-50/50 p-2">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <span
+                          className={`rounded px-2 py-0.5 text-[11px] font-semibold ${AGENT_COLORS[agent] || "bg-slate-100 text-slate-700"}`}
+                        >
+                          {agent}
+                        </span>
+                        <span className="text-[11px] text-slate-500">{rows.length}</span>
+                      </div>
+                      <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                        {rows.map((a, idx) => (
+                          <div key={`${agent}-${a.timestamp}-${idx}`} className="rounded-lg border border-slate-200 bg-white p-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[11px] text-slate-500">{a.timestamp}</span>
+                            </div>
+                            <p className="mt-1 text-xs text-slate-700">{a.reasoning_brief}</p>
+                            <p className="mt-1 text-[11px] text-slate-500">User: {a.user_name} · Outcome: {a.outcome}</p>
+                            <p className="mt-1 text-[11px] text-slate-500">Query: {a.query_summary}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
               ) : (
                 <p className="text-xs text-slate-500">No activity logs yet.</p>
               )}

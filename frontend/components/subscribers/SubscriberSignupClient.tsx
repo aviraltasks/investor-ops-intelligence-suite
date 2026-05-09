@@ -42,7 +42,7 @@ export function SubscriberSignupClient() {
   }
 
   return (
-    <form onSubmit={onSubmit} className="mt-8 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+    <form onSubmit={onSubmit} className="mt-4">
       <label className="text-sm text-slate-700">
         Work email
         <input
