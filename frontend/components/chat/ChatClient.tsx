@@ -654,6 +654,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
     utterance.onend = () => {
       setMicState("idle");
       setTtsState("ended");
+      // Refs update in useEffect after paint; guards in requestStartListening read refs synchronously.
+      micStateRef.current = "idle";
+      ttsStateRef.current = "ended";
       if (autoListenAfterSpeakRef.current) {
         autoListenAfterSpeakRef.current = false;
         autoListenQueuedRef.current = true;
@@ -710,6 +713,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
         fallback.onend = () => {
           setMicState("idle");
           setTtsState("ended");
+          micStateRef.current = "idle";
+          ttsStateRef.current = "ended";
           if (autoListenAfterSpeakRef.current) {
             autoListenAfterSpeakRef.current = false;
             autoListenQueuedRef.current = true;
