@@ -69,6 +69,20 @@ def test_named_month_without_year_rolls_to_nearest_future() -> None:
     assert slot[1] == "10:00 IST"
 
 
+def test_day_of_month_with_of_before_month() -> None:
+    """Phrases like '14th of May' must parse (do not fall back to 'today' / weekend false positives)."""
+    slot, reason = resolve_booking_slot("14th of may 3:00 p.m.", now=_NOW_FRI, max_days_ahead=120)
+    assert reason == "ok" and slot is not None
+    assert slot[0] == "2026-05-14"
+    assert slot[1] == "15:00 IST"
+
+
+def test_maize_typo_normalizes_to_may() -> None:
+    slot, reason = resolve_booking_slot("14th of maize 3pm", now=_NOW_FRI, max_days_ahead=120)
+    assert reason == "ok" and slot is not None
+    assert slot[0] == "2026-05-14"
+
+
 def test_tomorrow_morning_maps_to_10_am() -> None:
     slot, reason = resolve_booking_slot("tomorrow morning", now=_NOW_FRI, max_days_ahead=120)
     assert reason == "ok" and slot is not None

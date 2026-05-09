@@ -266,6 +266,17 @@ def _dedicated_waitlist_request(msg: str) -> bool:
     return False
 
 
+def _booking_card_payload_row(b: Booking) -> dict[str, Any]:
+    """Chat UI booking strip: needs code + slot fields (not only on happy-path confirm)."""
+    return {
+        "booking_code": b.booking_code,
+        "date": b.date,
+        "time_ist": b.time_ist,
+        "topic": b.topic,
+        "advisor": b.advisor,
+    }
+
+
 def _llm_polish_scheduling_reply(*, user_message: str, draft: str, payload: dict[str, Any], action: str) -> str:
     if not llm_available():
         return draft
@@ -494,7 +505,7 @@ def _execute_confirmed_book(
                     outcome="book_confirm_conflict",
                 )
             ],
-            payload={"status": "conflict"},
+            payload={"status": "conflict", **_booking_card_payload_row(conflict)},
         )
 
     code = _new_booking_code(session)
@@ -527,6 +538,8 @@ def _execute_confirmed_book(
             "time_ist": time_ist,
             "booking_code": code,
             "kind": "book",
+            "topic": topic,
+            "advisor": f"Advisor {advisor_idx}",
         },
     )
     traces.append(
@@ -669,7 +682,7 @@ def _execute_confirmed_reschedule(
                 f"That slot is now held by {conflict.booking_code}. Say reschedule again with a different time."
             ),
             traces=traces,
-            payload={"status": "conflict"},
+            payload={"status": "conflict", **_booking_card_payload_row(conflict)},
         )
     sync_cancel = sync_booking_cancelled(booking)
     booking.calendar_event_id = None
@@ -697,6 +710,8 @@ def _execute_confirmed_reschedule(
             "time_ist": time_ist,
             "booking_code": booking.booking_code,
             "kind": "reschedule",
+            "topic": booking.topic,
+            "advisor": booking.advisor,
         },
     )
     traces.append(
@@ -914,7 +929,7 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
                         outcome="reschedule_slot_conflict",
                     )
                 ],
-                payload={"status": "conflict", "booking_code": conflict.booking_code},
+                payload={"status": "conflict", **_booking_card_payload_row(conflict)},
             )
 
         old_date, old_time = booking.date, booking.time_ist
@@ -1204,7 +1219,14 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
                     outcome="post_booking_slot_suppressed",
                 )
             ],
-            payload={"status": "post_booking_idle", "booking_code": last_done.get("booking_code")},
+            payload={
+                "status": "post_booking_idle",
+                "booking_code": last_done.get("booking_code"),
+                "date": last_done.get("date"),
+                "time_ist": last_done.get("time_ist"),
+                "topic": last_done.get("topic"),
+                "advisor": last_done.get("advisor"),
+            },
         )
 
     conflict = session.scalar(
@@ -1220,7 +1242,7 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
                 f"You already have booking {conflict.booking_code} at {date_str} {time_ist}. "
                 "Would you like to reschedule instead?"
             ),
-            payload={"status": "conflict", "booking_code": conflict.booking_code},
+            payload={"status": "conflict", **_booking_card_payload_row(conflict)},
             traces=[
                 AgentTraceStep(
                     agent="scheduling_agent",

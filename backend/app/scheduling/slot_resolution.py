@@ -73,6 +73,8 @@ def _normalize(text: str) -> str:
     }
     for wrong, right in weekday_typo_map.items():
         t = re.sub(rf"\b{re.escape(wrong)}\b", right, t)
+    # Common month mis-hearing / typo from voice (STT)
+    t = re.sub(r"\bmaize\b", "may", t)
     return t
 
 
@@ -177,8 +179,12 @@ def _next_named_month_day(day: int, month: int, now: datetime) -> date | None:
 
 
 def _try_parse_named_month_date_no_year(t: str, now: datetime) -> tuple[date | None, str]:
-    # 26 may / 26th may
-    m = re.search(r"\b(\d{1,2})(?:st|nd|rd|th)?[\s.,/-]+([a-z]{3,9})\b", t, flags=re.IGNORECASE)
+    # 26 may / 26th may / 14th of may (optional "of" between day and month)
+    m = re.search(
+        r"\b(\d{1,2})(?:st|nd|rd|th)?(?:\s+of\s+|[\s.,/-]+)([a-z]{3,9})\b",
+        t,
+        flags=re.IGNORECASE,
+    )
     if m:
         day = int(m.group(1))
         mon = _month_from_token(m.group(2))
