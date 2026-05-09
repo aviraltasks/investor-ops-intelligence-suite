@@ -1,3 +1,4 @@
+import FinnHeroIllustration from "@/components/FinnHeroIllustration";
 import { LandingForms } from "@/components/LandingForms";
 
 export default function HomePage() {
@@ -16,6 +17,7 @@ export default function HomePage() {
       <div className="mt-12">
         <LandingForms />
       </div>
+      <FinnHeroIllustration />
     </div>
   );
 }
