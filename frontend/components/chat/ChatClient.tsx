@@ -109,6 +109,28 @@ type TraceTurnBlock = {
   traces: AgentTrace[];
 };
 
+/**
+ * Strip markdown / punctuation that speech engines read aloud badly, and normalize timezone abbreviations.
+ */
+function sanitizeTextForTts(text: string): string {
+  let s = text;
+  // Markdown bold / italic (order: double markers before single).
+  s = s.replace(/\*\*([^*]+)\*\*/g, "$1");
+  s = s.replace(/__([^_]+)__/g, "$1");
+  s = s.replace(/\*([^*\n]+)\*/g, "$1");
+  s = s.replace(/_([^_\n]+)_/g, "$1");
+  // [label](url) -> label
+  s = s.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");
+  // Inline code
+  s = s.replace(/`([^`]+)`/g, "$1");
+  // En-dash / em-dash in ranges (e.g. Mon–Fri) — avoid odd pauses or misreads
+  s = s.replace(/[–—]/g, " - ");
+  // Indian Standard Time: many voices misread "IST" as one token ("eest"); letter-spacing fixes it.
+  s = s.replace(/\bIST\b/g, "I S T");
+  s = s.replace(/\s+/g, " ").trim();
+  return s;
+}
+
 function voiceTtsText(data: ChatApiResponse): string {
   const cleaned = data.response
     .split("\n")
@@ -647,7 +669,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
 
   function speak(text: string, opts?: { autoListen?: boolean }) {
     if (!ttsSupportedRef.current || typeof window === "undefined") return;
-    const cleanText = (text || "").replace(/\s+/g, " ").trim();
+    const cleanText = sanitizeTextForTts((text || "").replace(/\s+/g, " ").trim());
     if (!cleanText) return;
     ttsRetryRef.current = false;
     autoListenAfterSpeakRef.current = Boolean(opts?.autoListen);
