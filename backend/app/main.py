@@ -210,6 +210,71 @@ def _faq_topic_bucket(message: str) -> str:
     return "General"
 
 
+# Exact labels produced by _faq_topic_bucket (and stored for new FAQ rows).
+_CANONICAL_FAQ_TOPIC_LABELS: frozenset[str] = frozenset(
+    {
+        "Exit Load",
+        "Expense Ratio",
+        "NAV",
+        "AUM",
+        "Lock-in Period",
+        "Tax & ELSS",
+        "Fund Comparison",
+        "Booking",
+        "General",
+    }
+)
+
+
+def _remap_legacy_faq_topic_column(stored: str) -> str:
+    """Map pre-bucketing interaction_logs.topic snippets to canonical FAQ labels.
+
+    Legacy values were often `_topic_from_message` (first ~4 words). Original user text is not
+    stored, so we use substring heuristics aligned with `_faq_topic_bucket`.
+    """
+    raw = (stored or "").strip()
+    if not raw:
+        return "General"
+    for c in _CANONICAL_FAQ_TOPIC_LABELS:
+        if raw.lower() == c.lower():
+            return c
+    bucket = _faq_topic_bucket(raw)
+    if bucket != "General":
+        return bucket
+    t = raw.lower()
+    if re.search(r"\bexit\b", t):
+        return "Exit Load"
+    if "expense" in t or "expence" in t or re.search(r"\bter\b", t):
+        return "Expense Ratio"
+    if re.search(r"\bnav\b", t):
+        return "NAV"
+    if re.search(r"\baum\b", t):
+        return "AUM"
+    if "lock-in" in t or "lockin" in t:
+        return "Lock-in Period"
+    if "tax" in t or "elss" in t or "80c" in t:
+        return "Tax & ELSS"
+    if "compare" in t or "versus" in t or re.search(r"\bvs\b", t):
+        return "Fund Comparison"
+    if "book" in t or "appointment" in t or "schedule" in t:
+        return "Booking"
+    return "General"
+
+
+def normalize_legacy_faq_interaction_topics(session: Session) -> int:
+    """Update FAQ interaction_logs rows whose topic is not a canonical bucket label. Idempotent."""
+    rows = list(session.scalars(select(InteractionLog).where(InteractionLog.intent == "faq")).all())
+    updated = 0
+    for row in rows:
+        new_topic = _remap_legacy_faq_topic_column(row.topic)
+        if new_topic != row.topic:
+            row.topic = new_topic
+            updated += 1
+    if updated:
+        session.commit()
+    return updated
+
+
 def _looks_like_bot_generated_text(message: str) -> bool:
     t = re.sub(r"\s+", " ", (message or "").lower()).strip()
     if not t:
@@ -541,6 +606,14 @@ def admin_clear_faq_cache() -> dict[str, Any]:
         "scope": "current_process",
         "note": "FAQ cache is in-memory per API process. Restarting the service also clears it.",
     }
+
+
+@app.post("/api/admin/maintenance/normalize-faq-topics")
+def admin_normalize_faq_topics() -> dict[str, Any]:
+    """One-shot: rewrite legacy FAQ rows (pre-bucketing topic snippets) to canonical labels."""
+    with _db() as session:
+        n = normalize_legacy_faq_interaction_topics(session)
+    return {"ok": True, "rows_updated": n}
 
 
 @app.get("/api/admin/bookings")
