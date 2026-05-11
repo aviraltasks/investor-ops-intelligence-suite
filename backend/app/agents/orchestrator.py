@@ -142,6 +142,25 @@ def _is_name_query(text: str) -> bool:
     )
 
 
+def _user_explicitly_wants_memory_recall(message: str) -> bool:
+    """User asked for recap; keep memory_recall alongside scheduling when both were routed."""
+    t = re.sub(r"\s+", " ", (message or "").lower()).strip()
+    return _contains_any(
+        t,
+        [
+            "what did we discuss",
+            "what did we talk",
+            "remember",
+            "last time",
+            "recap",
+            "summary",
+            "remind me what",
+            "what was i asking",
+            "what were we discussing",
+        ],
+    )
+
+
 def _looks_like_scheduling_followup_fragment(text: str) -> bool:
     """Short follow-up while clarifying booking time (avoids merging FAQ questions into book flow)."""
     t = (text or "").strip().lower()
@@ -253,6 +272,55 @@ def _compact_reply(text: str, *, max_len: int = 200) -> str:
     main = re.sub(r"\s+", " ", parts[0]).strip()
     sentences = re.split(r"(?<=[.!?])\s+", main)
     concise = " ".join(sentences[:2]).strip()[:max_len].rstrip()
+    if len(parts) == 2 and parts[1].strip():
+        lines = [ln for ln in parts[1].splitlines() if ln.strip()]
+        if lines:
+            concise += "\n\nSources:\n" + lines[0]
+    return concise
+
+
+def _is_scheduling_critical_reply(text: str) -> bool:
+    """Booking confirmations and slot guards must not be chopped to ~200 chars."""
+    t = (text or "").lower()
+    return any(
+        m in t
+        for m in (
+            "please confirm booking",
+            "what weekday time works",
+            "outside our booking window",
+            "outside advisor hours",
+            "only book weekdays",
+            "i can only book weekdays",
+            "i got your time, but i need the date",
+            "that time is outside advisor hours",
+            "that looks like a past slot",
+            "that slot was just taken",
+            "already have booking",
+            "booking code:",
+            "you're all set",
+            "you are all set",
+            "tentative hold",
+            "waitlist",
+        )
+    )
+
+
+def _compact_reply_loose(text: str, *, max_len: int = 1200) -> str:
+    """Preserve full scheduling copy; trim only if extremely long, at a word boundary."""
+    body = (text or "").strip()
+    if not body:
+        return ""
+    parts = body.split("\n\nSources:\n", 1)
+    head = parts[0].strip()
+    if len(head) <= max_len:
+        concise = head
+    else:
+        cut = head[:max_len]
+        sp = cut.rfind(" ")
+        if sp > int(max_len * 0.65):
+            concise = cut[:sp].rstrip() + "…"
+        else:
+            concise = cut.rstrip() + "…"
     if len(parts) == 2 and parts[1].strip():
         lines = [ln for ln in parts[1].splitlines() if ln.strip()]
         if lines:
@@ -526,9 +594,25 @@ def handle_chat_turn(session: Session, session_id: str, user_name: str, message:
     if "faq" in intents and "general" in intents:
         intents = [i for i in intents if i != "general"]
 
+    suppressed_memory_for_scheduling = False
+    if "scheduling" in intents and "memory_recall" in intents and not _user_explicitly_wants_memory_recall(
+        sanitized_message
+    ):
+        intents = [i for i in intents if i != "memory_recall"]
+        suppressed_memory_for_scheduling = True
+
     payload["intents"] = intents
     if intent_trace:
         traces.append(intent_trace)
+    if suppressed_memory_for_scheduling:
+        traces.append(
+            AgentTraceStep(
+                agent="orchestrator",
+                reasoning_brief="Scheduling flow takes precedence over automatic memory recap for this turn.",
+                tools=["intent.scheduling_priority"],
+                outcome="memory_recall_suppressed",
+            )
+        )
 
     responses: list[str] = []
     booking_code: str | None = None
@@ -614,8 +698,10 @@ def handle_chat_turn(session: Session, session_id: str, user_name: str, message:
                 {
                     "role": "system",
                     "content": (
-                        "You are Finn. Merge SECTION_* blocks into ONE cohesive chat reply. "
-                        "Preserve all factual details (booking codes, dates, times, URLs from RAG). "
+                        "You are Finn, the assistant (Groww-style fintech support). Merge SECTION_* blocks into "
+                        "ONE cohesive chat reply. Speak only as Finn addressing the user — never use first-person "
+                        "as if you were the customer (do not write 'I want to book' for the user's intent). "
+                        "Preserve all factual details (booking codes, dates, times, IST, advisor names, URLs from RAG). "
                         "Do not contradict specialists. No investment advice."
                     ),
                 },
@@ -637,8 +723,11 @@ def handle_chat_turn(session: Session, session_id: str, user_name: str, message:
                 )
             )
 
-    # Keep default UX concise for chat/voice while preserving source line if present.
-    final_text = _compact_reply(final_text)
+    # Keep default UX concise; never truncate booking confirmations / slot errors mid-sentence.
+    if _is_scheduling_critical_reply(final_text):
+        final_text = _compact_reply_loose(final_text)
+    else:
+        final_text = _compact_reply(final_text)
     payload["debug"] = {
         "clarification_prompt_count": sum(1 for t in traces if "clarification_prompt" in (t.outcome or "")),
         "fallback_answer_count": sum(
