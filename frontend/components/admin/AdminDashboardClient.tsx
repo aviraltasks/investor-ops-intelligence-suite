@@ -178,7 +178,7 @@ export function AdminDashboardClient() {
   }
 
   async function onSendBookingEmail(code: string) {
-    const to = "advisor@example.com";
+    const to = "aviralstashes@gmail.com";
     const r = await fetch(`${backendBaseUrl}/api/admin/bookings/${encodeURIComponent(code)}/email/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

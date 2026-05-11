@@ -87,7 +87,7 @@ class SendPulseIn(BaseModel):
 
 
 class BookingEmailSendIn(BaseModel):
-    to_email: str = "advisor@example.com"
+    to_email: str = "aviralstashes@gmail.com"
 
 
 class SecureDetailsIn(BaseModel):
