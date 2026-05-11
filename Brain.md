@@ -2,9 +2,9 @@
 
 ## Read This First
 
-You are building a **portfolio-grade capstone project** for a Product Manager transitioning into AI-first PM roles. The submission deadline is **May 7, 11:59 PM IST** — approximately 3 days from project start.
+You are maintaining a **portfolio-grade capstone project** for a Product Manager transitioning into AI-first PM roles. The original submission window was **May 7, 2026 (IST)**; treat the repo as **post-submission**: keep docs and code aligned with what is deployed.
 
-This is not a bootcamp submission. It is a portfolio piece that recruiters and senior PMs will review. The quality bar is "recruiter-impressive product team output," not "student assignment that meets the brief." Every architectural decision, every UI element, every line of documentation should reflect that bar.
+This is not only a bootcamp artifact. It is a portfolio piece that recruiters and senior PMs may review. The quality bar is "recruiter-impressive product team output," not "student assignment that meets the brief." Every architectural decision, every UI element, every line of documentation should reflect that bar.
 
 **Every feature you build must be demonstrable in a 5-minute video.** If a feature works but cannot be shown clearly to a reviewer in that window, it does not earn its place in the build.
 
@@ -109,7 +109,7 @@ If you build an ML intent classifier, its output serves as a **hint** to the orc
 
 ### Agent Behavior Must Be Visible
 
-The UI must include an agent activity panel (collapsible sidebar or similar) that shows, for each query: which agent was invoked, what it reasoned, what tools it called, whether it re-planned, and what it concluded. This serves as proof of agentic behavior for reviewers and is a non-negotiable demo element.
+The UI must include an agent activity panel (collapsible sidebar or similar) that shows, for each query: which agent was invoked and what happened in plain language, with **full** reasoning text, tool names, outcomes, and re-plan flags available to reviewers (e.g. behind a **Technical details** expander so PMs see a clean summary first). This serves as proof of agentic behavior for reviewers and is a non-negotiable demo element.
 
 ---
 
@@ -145,7 +145,7 @@ The total source manifest must contain 30+ official URLs (the above gets us to 2
 | EVAL_CRITERIA.md | Evaluation suite — golden dataset, adversarial tests, ML metrics | When building evals and generating eval report |
 | HEALTH.md | System health tracker | Update after each phase |
 | ARCHITECTURE.md | Your technical design (you create this) | Create after reading all other docs |
-| IMPROVEMENT.md | Living UAT feedback log (you create and maintain) | Log issues as found, update as fixed |
+| IMPROVEMENT.md | Optional living UAT log (create if you want a single doc; otherwise use `UAT_CHECKLIST.md` + issues) | Log issues as found, update as fixed |
 
 ---
 
@@ -165,7 +165,7 @@ The total source manifest must contain 30+ official URLs (the above gets us to 2
 
 ## Cost Constraints (Free Tier Target)
 
-- LLM: Groq (primary), Gemini 3.1 Flash-Lite preview (fallback) — free tier
+- LLM: Groq (primary), Gemini Flash-Lite family via env (default `gemini-2.5-flash-lite` in code) — free tier
 - Google Calendar API, Sheets API — free tier
 - Email: Gmail SMTP with app password — free
 - STT/TTS: Browser Web Speech API — free
@@ -273,4 +273,4 @@ This makes the email feel like a professional briefing card, not an automated no
 
 ---
 
-*After reading all documents, create ARCHITECTURE.md with your proposed design and share for review. Do not begin implementation until approved.*
+*Initial gate (Phase 0): create ARCHITECTURE.md and get PM review before first implementation. After the capstone is shipped, keep ARCHITECTURE.md and README in sync with the codebase when behavior changes.*

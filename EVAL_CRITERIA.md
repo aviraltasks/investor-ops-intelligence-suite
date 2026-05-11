@@ -168,22 +168,22 @@ For each agent, provide one example query that demonstrates real agentic behavio
 **Orchestrator:**
 - Query: [complex multi-intent query]
 - Expected: Reasons about which agents to invoke, in what order
-- Agent panel shows: reasoning trace, routing decision, evaluation of combined output
+- Agent panel shows: PM summary per step; expand **Technical details** for `reasoning_brief`, tools, `outcome`, intents, re-plan flag
 
 **RAG Agent:**
 - Query: [cross-source query requiring multi-step retrieval]
 - Expected: Plans retrieval from multiple sources, evaluates sufficiency, re-retrieves if needed
-- Agent panel shows: retrieval plan, tool calls, sufficiency evaluation
+- Agent panel shows: summary line reflects retrieval/synthesis; technical block lists tool strings and outcomes
 
 **Scheduling Agent:**
 - Query: [booking with edge case — e.g., first choice unavailable]
 - Expected: Validates, finds unavailable, offers alternatives
-- Agent panel shows: validation steps, availability check, slot offering logic
+- Agent panel shows: mapped scheduling outcome; technical block shows slot/guard tools as returned by API
 
 **Review Intelligence Agent:**
 - Trigger: Admin generates pulse
 - Expected: Fetches reviews, runs ML pipeline, generates structured output
-- Agent panel shows: fetch → ML clustering → LLM labeling → pulse assembly
+- Agent panel shows: pulse-related summary; admin pulse tab remains primary proof of ML pipeline
 
 ### 5.2 Non-Agentic Behavior Check
 

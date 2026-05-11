@@ -1,7 +1,7 @@
 # HEALTH.md — Project Health Tracker
 
 **Purpose:** Quick-check system status. Cursor updates after each phase.  
-**Last updated:** Post-submission hardening (May 9, 2026)
+**Last updated:** Agent panel / admin log UX alignment (May 11, 2026)
 
 ---
 
@@ -57,8 +57,8 @@
 | Page | Status | Notes |
 |------|--------|-------|
 | Landing (/) | ✅ Shell | Name + booking code paths; footer + nav |
-| Chat (/chat) | ✅ Functional | Full conversation UI wired to `/api/chat`; live agent trace panel + booking card; Web Speech API voice layer (Phase 7) |
-| Admin (/admin) | ✅ Functional | Dashboard graphs, pulse actions, bookings/email actions, subscribers, and agent activity log |
+| Chat (/chat) | ✅ Functional | Full conversation UI wired to `/api/chat`; agent panel with PM summaries + expandable technical trace + booking card; Web Speech API voice layer (Phase 7) |
+| Admin (/admin) | ✅ Functional | Dashboard graphs, pulse actions, bookings/email actions, subscribers, and agent activity log (aligned copy/UX with chat panel) |
 | Secure (/secure/[code]) | ✅ Functional | Booking-code verify, summary, phone/email/consent validation, success/error states, and secure-details submit API |
 | Subscribers (/subscribers) | ✅ Functional | Email signup page wired to `POST /api/subscribers` with validation/error/success states |
 
@@ -85,7 +85,7 @@
 - [ ] Google SA + Calendar + Sheet shared
 - [ ] Gmail app password configured
 - [ ] All 5 pages accessible via live URLs
-- [ ] Agent activity panel showing real reasoning
+- [ ] Agent activity panel: PM summary lines + expand **Technical details** to verify raw tools/outcomes
 - [ ] Voice working on /chat
 - [ ] Admin dashboard graphs rendering
 - [x] Eval report generated (`EVAL_REPORT.md`)

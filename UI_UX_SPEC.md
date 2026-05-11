@@ -123,17 +123,12 @@ The previous project (M3 — INDMoney Voice Agent) used a dark navy/teal glassmo
 - **Text input bar** at bottom — always visible. Send button. Mic button (for voice toggle).
 - **Mic button states:** Idle (mic icon, muted color) → Listening (animated, active color like red/green pulse) → Processing (spinner) → Speaking (speaker icon animation).
 
-**Right Panel — Agent Activity Panel:**
+**Right Panel — Agent Activity Panel (shipped as "How Finn AI Agents Are Helping"):**
 - **Collapsible** — toggle open/close. Default: closed on mobile, open on desktop.
-- **Title:** "Agent Activity" or "Behind the Scenes"
-- **Content per query:** A log of what happened:
-  - Agent name (color-coded)
-  - Brief reasoning summary (1-2 lines)
-  - Tools called (as small chips/tags)
-  - Outcome (success, retried, escalated)
-  - Timestamp
+- **Per user turn:** Turn title, caption **Steps run top → bottom**, quoted user message, then one card per agent step in pipeline order.
+- **Each step card:** Muted **step number** badge (1…n); **friendly agent label** (color-coded); **one-line PM summary** (mapped from `outcome` / `tools` / short safe `reasoning_brief`); collapsed **Technical details** with raw `reasoning_brief`, tool strings, outcome, single-pass vs replanned, and raw agent id.
 - **Entries appear sequentially** as agents process — gives a live "thinking" feel.
-- **This panel is the single most important element for reviewer evaluation of agentic behavior.** It must show real reasoning, not generic messages.
+- **This panel is the single most important element for reviewer evaluation of agentic behavior.** Summaries must be grounded in real trace data; reviewers expand technical details for proof.
 
 ### 3.3 Secure Details Page (/secure/[bookingCode])
 
@@ -193,10 +188,10 @@ The previous project (M3 — INDMoney Voice Agent) used a dark navy/teal glassmo
   - Email preview button → shows formatted email in a modal or inline
   - Send email button → dispatches, status changes to "Sent"
 
-**Agent Activity Log Tab:**
-- Table/list of recent agent decisions across all user sessions.
-- Shows: timestamp, user (first name only), query summary, agents invoked, outcome.
-- Proof of orchestration for reviewers.
+**Agent Activity Log Tab (shipped):**
+- Columns **per agent** (not a single flat table): scrollable cards, newest at top.
+- Each card: **short timestamp**, **PM summary line** (same mapping module as chat), **Technical details** with user, session id, raw `reasoning_brief`, tools list, outcome, query summary, ISO timestamp.
+- Proof of orchestration for reviewers; content **aligned** with chat agent panel.
 
 ### 3.5 Subscriber Page (/subscribers)
 

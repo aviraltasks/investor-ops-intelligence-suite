@@ -220,6 +220,8 @@ Each user turn emits an array of trace objects, e.g.:
 
 The frontend maps `agent` → color per [UI_UX_SPEC.md](UI_UX_SPEC.md) §2.1.
 
+**Shipped contract (differs slightly from the illustrative JSON above):** each step is a flat object with `agent: string`, `reasoning_brief: string`, `tools: string[]` (tool **names**, not nested objects), `replanned: boolean`, `outcome: string`. The chat sidebar and admin **Agent Activity Log** render a **human-readable summary** from `outcome` / `tools` / `reasoning_brief` (see `frontend/components/chat/agentTraceCopy.ts`) and tuck the raw strings behind a per-step **Technical details** disclosure.
+
 ---
 
 ## 7. ML pipeline (theme detection)

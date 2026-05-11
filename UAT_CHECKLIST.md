@@ -50,9 +50,10 @@ Use this sheet for one full pass after deploy. Mark each item Pass/Fail and add 
 
 ## E) Admin / Activity visibility
 
-- [ ] Agent Activity panel shows consistent trace flow (orchestrator -> specialist -> memory)
-- [ ] No anomalous gibberish outcomes in trace entries
-- [ ] Chat payload debug exists (`clarification_prompt_count`, `fallback_answer_count`, `trace_count`)
+- [ ] Chat agent panel: PM summary lines + **Steps run top → bottom**; expand **Technical details** and confirm raw tools/outcomes match API
+- [ ] Admin **Agent Activity Log**: same style summaries as chat; technical block includes user, query, outcome
+- [ ] No anomalous gibberish in **technical** outcome fields when expanded
+- [ ] Chat payload debug exists (`clarification_prompt_count`, `fallback_answer_count`, `trace_count`) when `?debugAgents=1`
 
 ## Result summary
 

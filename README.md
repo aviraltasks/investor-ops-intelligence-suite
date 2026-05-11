@@ -160,7 +160,7 @@ Tracked in [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md).
 - Backend integration:
   - sends user turns to `POST /api/chat`
   - renders booking confirmation card from chat payload
-  - renders real per-turn agent trace logs (reasoning/tools/replanned/outcome)
+  - agent activity panel: per-turn **step numbers** (1…n), **PM-friendly summary** per agent step (shared copy map in `frontend/components/chat/agentTraceCopy.ts`), caption **Steps run top → bottom**; raw `reasoning_brief`, tools, outcomes, and pass (single/replanned) under collapsed **Technical details**
 - Validation:
   - frontend `npm run lint` + `npm run build` pass
   - backend regression tests pass after integration
@@ -195,7 +195,7 @@ Tracked in [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md).
 ### Phase 8 implementation snapshot
 
 - Admin dashboard shipped in `frontend/app/admin/page.tsx` + `frontend/components/admin/AdminDashboardClient.tsx`
-  - tabs: dashboard, pulse management, bookings, agent activity log
+  - tabs: dashboard, pulse management, bookings, agent activity log (**same PM summaries + Technical details** pattern as chat, reusing `agentTraceCopy.ts`; column hint **Newest at top**)
   - date range selector and graph cards for review themes, appointments, booking topics, and FAQ topics
 - New admin/backend APIs in `backend/app/main.py`:
   - `GET /api/admin/analytics`

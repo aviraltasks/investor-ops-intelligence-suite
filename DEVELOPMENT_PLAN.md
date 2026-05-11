@@ -24,6 +24,10 @@
 | 11 | Edge Cases, Evals & Hardening | [x] | Added hard safety guards (PII block + secure redirect, investment-advice refusal, prompt-injection refusal), input sanitization, and scheduling hardening (invalid/past/weekend/out-of-hours rejection, slot conflict detection, already-cancelled handling); added `test_phase11_hardening.py`; generated `EVAL_REPORT.md`; full regression green |
 | 12 | README, Demo & Submission | [x] | README expanded (architecture summary, agents, APIs, full 31+ URL manifest, submission + E2E verification checklists); `screenshots/README.md` capture guide; `EVAL_REPORT.md` linked; demo video deferred per PM (record after prod deploy); run `pytest` + `npm run lint` + `npm run build` green |
 
+### Post–Phase 12 (maintenance)
+
+- **May 2026 — Agent visibility UX:** Chat agent panel uses step badges, shared PM-facing labels (`agentTraceCopy.ts`), and collapsed technical details; admin Agent Activity Log uses the same mapping for consistent reviewer/PM experience.
+
 ---
 
 ## Phase Details
@@ -121,7 +125,7 @@
 **Acceptance:**
 - Chat page (/chat) fully functional with styled message bubbles
 - Left sidebar: covered schemes, example questions, quick topics, trending theme badge
-- Agent activity panel (right sidebar): shows agent reasoning, tools called, decisions per query
+- Agent activity panel (right sidebar): shows agent + **what happened** (mapped summary), step order, and **Technical details** with raw reasoning, tools, outcomes, re-plan flag per query
 - Transparency indicators during processing ("Searching knowledge base...", etc.)
 - Booking confirmation card renders inline with copyable code
 - Example questions clickable (auto-send to Finn)
