@@ -693,6 +693,7 @@ def handle_chat_turn(session: Session, session_id: str, user_name: str, message:
 
     if llm_available() and len([r for r in responses if r]) > 1:
         bundle = "\n\n---\n\n".join(f"SECTION_{i+1}:\n{r}" for i, r in enumerate(responses) if r)
+        # Short HTTP timeout: merge is a single auxiliary call; fail fast to joined sections vs blocking chat ~90s.
         syn = chat_completion_safe(
             [
                 {
@@ -711,6 +712,7 @@ def handle_chat_turn(session: Session, session_id: str, user_name: str, message:
                 },
             ],
             temperature=0.3,
+            http_timeout=25.0,
         )
         if syn.provider != "none" and syn.text.strip():
             final_text = syn.text.strip()

@@ -53,7 +53,7 @@ def _candidate_gemini_models() -> list[str]:
     return out
 
 
-def _call_groq(messages: list[dict[str, str]], *, temperature: float) -> str:
+def _call_groq(messages: list[dict[str, str]], *, temperature: float, http_timeout: float = 90.0) -> str:
     key = (os.getenv("GROQ_API_KEY") or "").strip()
     if not key:
         raise RuntimeError("missing GROQ_API_KEY")
@@ -63,7 +63,7 @@ def _call_groq(messages: list[dict[str, str]], *, temperature: float) -> str:
         "temperature": temperature,
         "max_tokens": 4096,
     }
-    with httpx.Client(timeout=90.0) as client:
+    with httpx.Client(timeout=http_timeout) as client:
         r = client.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
@@ -74,7 +74,7 @@ def _call_groq(messages: list[dict[str, str]], *, temperature: float) -> str:
     return str(data["choices"][0]["message"]["content"]).strip()
 
 
-def _call_gemini(messages: list[dict[str, str]], *, temperature: float) -> str:
+def _call_gemini(messages: list[dict[str, str]], *, temperature: float, http_timeout: float = 90.0) -> str:
     key = (os.getenv("GEMINI_API_KEY") or "").strip()
     if not key:
         raise RuntimeError("missing GEMINI_API_KEY")
@@ -89,7 +89,7 @@ def _call_gemini(messages: list[dict[str, str]], *, temperature: float) -> str:
             "generationConfig": {"temperature": temperature, "maxOutputTokens": 4096},
         }
         try:
-            with httpx.Client(timeout=90.0) as client:
+            with httpx.Client(timeout=http_timeout) as client:
                 r = client.post(url, params={"key": key}, json=body)
                 r.raise_for_status()
                 data = r.json()
@@ -113,6 +113,7 @@ def chat_completion(
     messages: list[dict[str, str]],
     *,
     temperature: float = 0.25,
+    http_timeout: float | None = None,
 ) -> LLMResponse:
     """
     Try Groq (OpenAI-compatible chat completions), then Gemini generateContent.
@@ -121,13 +122,15 @@ def chat_completion(
     if not llm_available():
         return LLMResponse("", "none", "llm_keys_missing")
 
+    timeout = 90.0 if http_timeout is None else float(http_timeout)
+
     groq_key = (os.getenv("GROQ_API_KEY") or "").strip()
     gem_key = (os.getenv("GEMINI_API_KEY") or "").strip()
     errors: list[str] = []
 
     if groq_key:
         try:
-            return LLMResponse(_call_groq(messages, temperature=temperature), "groq")
+            return LLMResponse(_call_groq(messages, temperature=temperature, http_timeout=timeout), "groq")
         except Exception as e:
             errors.append(f"groq:{type(e).__name__}:{e}")
             if not gem_key:
@@ -135,7 +138,7 @@ def chat_completion(
 
     if gem_key:
         try:
-            return LLMResponse(_call_gemini(messages, temperature=temperature), "gemini")
+            return LLMResponse(_call_gemini(messages, temperature=temperature, http_timeout=timeout), "gemini")
         except Exception as e:
             errors.append(f"gemini:{type(e).__name__}:{e}")
             return LLMResponse("", "none", "; ".join(errors))
@@ -147,12 +150,13 @@ def chat_completion_safe(
     messages: list[dict[str, str]],
     *,
     temperature: float = 0.25,
+    http_timeout: float | None = None,
 ) -> LLMResponse:
     """Never raises; returns provider \"none\" on total failure."""
     if not llm_available():
         return LLMResponse("", "none", "llm_keys_missing")
     try:
-        return chat_completion(messages, temperature=temperature)
+        return chat_completion(messages, temperature=temperature, http_timeout=http_timeout)
     except Exception as e:
         return LLMResponse("", "none", f"chat_completion_safe:{type(e).__name__}:{e}")
 
