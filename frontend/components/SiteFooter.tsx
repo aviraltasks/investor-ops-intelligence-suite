@@ -4,8 +4,8 @@ const GITHUB_REPO = "https://github.com/aviraltasks/investor-ops-intelligence-su
 export function SiteFooter() {
   return (
     <footer className="mt-auto border-t border-slate-200 bg-white">
-      <div className="mx-auto max-w-5xl px-4 py-8 text-sm text-slate-600">
-        <div className="flex flex-col items-center gap-3 text-center sm:flex-row sm:flex-wrap sm:items-center sm:justify-center sm:gap-x-6 sm:gap-y-2 sm:text-left">
+      <div className="mx-auto max-w-5xl px-4 py-8 text-center text-sm text-slate-600">
+        <div className="flex flex-col items-center justify-center gap-3 sm:flex-row sm:flex-wrap sm:gap-x-6 sm:gap-y-2">
           <p className="font-medium text-slate-900 sm:shrink-0">
             Investor Ops & Intelligence Suite
           </p>
@@ -29,11 +29,17 @@ export function SiteFooter() {
           </p>
         </div>
 
-        <details className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
-          <summary className="cursor-pointer font-medium text-indigo-900">
+        <details className="open:[&>summary>span:first-of-type]:rotate-90 mx-auto mt-6 w-full max-w-3xl rounded-lg border border-slate-200 bg-slate-50 p-4 text-center">
+          <summary className="flex cursor-pointer list-none items-center justify-center gap-2 font-medium text-indigo-900 [&::-webkit-details-marker]:hidden">
+            <span
+              aria-hidden
+              className="inline-block origin-center text-slate-500 transition-transform duration-200"
+            >
+              ▸
+            </span>
             About This Product
           </summary>
-          <div className="mt-3 space-y-3 text-slate-700">
+          <div className="mt-3 space-y-3 text-slate-700 [&>p]:text-balance">
             <p>
               An AI-native ops assistant for mutual fund platforms — built on a multi-agent architecture
               where specialized agents (orchestrator, RAG, scheduling, review intelligence, memory) reason
