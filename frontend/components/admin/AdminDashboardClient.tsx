@@ -551,35 +551,37 @@ export function AdminDashboardClient() {
         )}
 
         {tab === "bookings" && (
-          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <h3 className="text-sm font-semibold text-slate-900">Bookings</h3>
-            <div className="mt-3 overflow-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="text-slate-500">
+          <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <h3 className="shrink-0 text-sm font-semibold text-slate-900">Bookings</h3>
+            <div className="min-h-0 max-h-[min(52vh,32rem)] overflow-auto rounded-lg border border-slate-100">
+              <table className="w-full min-w-[640px] text-left text-xs">
+                <thead className="sticky top-0 z-10 bg-slate-50 text-slate-600 shadow-[inset_0_-1px_0_0_rgb(226,232,240)]">
                   <tr>
-                    <th className="py-1">Code</th>
-                    <th className="py-1">Name</th>
-                    <th className="py-1">Topic</th>
-                    <th className="py-1">Date/Time</th>
-                    <th className="py-1">Advisor</th>
-                    <th className="py-1">Status</th>
-                    <th className="py-1">Email</th>
-                    <th className="py-1">Actions</th>
+                    <th className="py-2 pl-1 pr-2">Code</th>
+                    <th className="py-2 pr-2">Name</th>
+                    <th className="py-2 pr-2">Topic</th>
+                    <th className="py-2 pr-2">Date/Time</th>
+                    <th className="py-2 pr-2">Advisor</th>
+                    <th className="py-2 pr-2">Status</th>
+                    <th className="py-2 pr-2">Email</th>
+                    <th className="py-2 pr-1">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {bookings.map((b) => (
-                    <tr key={b.booking_code} className="border-t border-slate-100">
-                      <td className="py-1 font-mono">{b.booking_code}</td>
-                      <td className="py-1">{b.customer_name}</td>
-                      <td className="py-1">{b.topic}</td>
-                      <td className="py-1">{b.date} {formatTimeIstForDisplay(b.time_ist)}</td>
-                      <td className="py-1">{b.advisor}</td>
-                      <td className="py-1">
+                    <tr key={b.booking_code} className="border-t border-slate-100 bg-white">
+                      <td className="py-1.5 pl-1 pr-2 font-mono">{b.booking_code}</td>
+                      <td className="py-1.5 pr-2">{b.customer_name}</td>
+                      <td className="py-1.5 pr-2">{b.topic}</td>
+                      <td className="py-1.5 pr-2">
+                        {b.date} {formatTimeIstForDisplay(b.time_ist)}
+                      </td>
+                      <td className="py-1.5 pr-2">{b.advisor}</td>
+                      <td className="py-1.5 pr-2">
                         <span className="rounded-full bg-slate-100 px-2 py-0.5">{b.status}</span>
                       </td>
-                      <td className="py-1">{b.email_status}</td>
-                      <td className="py-1">
+                      <td className="py-1.5 pr-2">{b.email_status}</td>
+                      <td className="py-1.5 pr-1">
                         <div className="flex gap-1">
                           <button
                             type="button"
@@ -603,7 +605,10 @@ export function AdminDashboardClient() {
               </table>
             </div>
             {emailDraft && (
-              <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs whitespace-pre-wrap">
+              <div className="shrink-0 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs whitespace-pre-wrap">
+                <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+                  Email preview
+                </p>
                 {emailDraft}
               </div>
             )}
