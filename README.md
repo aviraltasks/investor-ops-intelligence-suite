@@ -1,6 +1,6 @@
 # Investor Ops & Intelligence Suite
 
-Capstone project: **Finn** (smart FAQ + review pulse + advisor scheduling) for a Groww-style fintech. Product and engineering specs live in the repo root (`Brain.md`, `PRD.md`, `ARCHITECTURE.md`, etc.). For a **single-file code + agent overview** (e.g. upload to another chat tool), see [`OFFICE_AI_PROJECT_BRIEF.md`](OFFICE_AI_PROJECT_BRIEF.md).
+Capstone project: **Finn** (smart FAQ + review pulse + advisor scheduling) for a Groww-style fintech. Product and engineering specs live in the repo root (`Brain.md`, `PRD.md`, `ARCHITECTURE.md`, etc.). For **codebase layout + technical behavior** in one file (agents, traces, APIs), see [`CODEBASE_TECHNICAL_GUIDE.md`](CODEBASE_TECHNICAL_GUIDE.md).
 
 ## Final submission links
 

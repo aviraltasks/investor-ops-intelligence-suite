@@ -145,7 +145,7 @@ The total source manifest must contain 30+ official URLs (the above gets us to 2
 | EVAL_CRITERIA.md | Evaluation suite — golden dataset, adversarial tests, ML metrics | When building evals and generating eval report |
 | HEALTH.md | System health tracker | Update after each phase |
 | ARCHITECTURE.md | Your technical design (you create this) | Create after reading all other docs |
-| OFFICE_AI_PROJECT_BRIEF.md | Single upload: agents, trace schema, orchestrator pipeline, key APIs | Share with external LLM chats when Cursor is unavailable |
+| CODEBASE_TECHNICAL_GUIDE.md | Codebase + technical functionality: agents, trace schema, orchestrator pipeline, key APIs | Onboarding, reviews, or upload to another LLM when Cursor is unavailable |
 | IMPROVEMENT.md | Optional living UAT log (create if you want a single doc; otherwise use `UAT_CHECKLIST.md` + issues) | Log issues as found, update as fixed |
 
 ---

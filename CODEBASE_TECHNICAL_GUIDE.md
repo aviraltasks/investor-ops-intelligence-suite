@@ -1,8 +1,8 @@
-# Finn — Office / Claude upload brief
+# Codebase & technical functionality — Finn (Investor Ops & Intelligence Suite)
 
-**Purpose:** One file to upload (e.g. to Claude web) when you cannot use Cursor. It summarizes how the **Investor Ops & Intelligence Suite** actually works in code, especially **agents**, **traces**, and **APIs**.
+**What this is:** A single-document explanation of how the repo **actually works in code**: stack layout, main APIs, **agent orchestration**, **trace schema**, LLM and integrations, and where to look in the source. Use it for onboarding, reviews, or pasting into another LLM when Cursor is not available.
 
-**Refresh:** Regenerate or edit this file when `orchestrator.py`, trace shapes, or major APIs change. Repo root also has `README.md`, `ARCHITECTURE.md`, `Brain.md`, `PRD.md` for full product context.
+**Keep in sync:** Update when `orchestrator.py`, trace shapes, or major APIs change. Deeper product intent lives in `README.md`, `ARCHITECTURE.md`, `Brain.md`, and `PRD.md`.
 
 ---
 
@@ -115,7 +115,7 @@ Typical **trace order** for a normal turn (simplified):
 
 ### `rag_agent.py`
 
-- `answer_faq(session, message)` → `AgentResult` with **many** traces: retrieval planning, vector/lexical search, sufficiency, optional LLM synthesis, outcomes like `faq_answer`, `hits=N`, `clarification_prompt`, etc. (Large file — this brief does not list every branch.)
+- `answer_faq(session, message)` → `AgentResult` with **many** traces: retrieval planning, vector/lexical search, sufficiency, optional LLM synthesis, outcomes like `faq_answer`, `hits=N`, `clarification_prompt`, etc. (Large file — this guide does not list every branch.)
 
 ### `scheduling_agent.py`
 
@@ -185,7 +185,7 @@ Run: `cd backend && pytest`
 
 ---
 
-## 11. Questions this brief is meant to answer
+## 11. FAQ (quick answers)
 
 - “What runs first on every chat message?” → Memory load + pulse context, then orchestrator guards + intents + specialists + optional merge.
 - “Why do I see two `orchestrator` steps?” → e.g. intent routing + later `synthesized` merge, or guard steps vs routing.
