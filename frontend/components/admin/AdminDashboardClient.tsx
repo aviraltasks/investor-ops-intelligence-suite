@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { friendlyAgentDisplayName, traceWhatHappenedLine } from "../chat/agentTraceCopy";
 
 type Booking = {
   booking_code: string;
@@ -30,6 +31,7 @@ function formatPctShare(value: number, total: number): string {
 }
 type AgentLog = {
   timestamp: string;
+  session_id?: string;
   user_name: string;
   agent: string;
   reasoning_brief: string;
@@ -37,6 +39,17 @@ type AgentLog = {
   query_summary: string;
   tools: string[];
 };
+
+function formatAgentLogTimestamp(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 type PulsePreview = {
   pulse_id: number;
@@ -634,21 +647,77 @@ export function AdminDashboardClient() {
                         <span
                           className={`rounded px-2 py-0.5 text-[11px] font-semibold ${AGENT_COLORS[agent] || "bg-slate-100 text-slate-700"}`}
                         >
-                          {agent}
+                          {friendlyAgentDisplayName(agent)}
                         </span>
                         <span className="text-[11px] text-slate-500">{rows.length}</span>
                       </div>
+                      <p className="mb-2 text-[10px] leading-tight text-slate-400">Newest at top</p>
                       <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-                        {rows.map((a, idx) => (
-                          <div key={`${agent}-${a.timestamp}-${idx}`} className="rounded-lg border border-slate-200 bg-white p-2">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-[11px] text-slate-500">{a.timestamp}</span>
+                        {rows.map((a, idx) => {
+                          const pmLine = traceWhatHappenedLine({
+                            agent: a.agent,
+                            outcome: a.outcome || "",
+                            tools: Array.isArray(a.tools) ? a.tools : [],
+                            reasoning_brief: a.reasoning_brief || "",
+                          });
+                          return (
+                            <div key={`${agent}-${a.timestamp}-${idx}`} className="rounded-lg border border-slate-200 bg-white p-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[11px] text-slate-500" title={a.timestamp}>
+                                  {formatAgentLogTimestamp(a.timestamp)}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-xs leading-snug text-slate-800">{pmLine}</p>
+                              <details className="mt-1.5">
+                                <summary className="cursor-pointer text-[10px] text-slate-500 underline decoration-slate-300 underline-offset-2 hover:text-slate-600 [&::-webkit-details-marker]:hidden">
+                                  Technical details
+                                </summary>
+                                <div className="mt-2 space-y-1.5 border-l border-slate-200 pl-2">
+                                  <p className="text-[10px] text-slate-600">
+                                    <span className="font-medium text-slate-700">Agent id:</span>{" "}
+                                    <span className="font-mono">{a.agent}</span>
+                                  </p>
+                                  <p className="text-[10px] text-slate-600">
+                                    <span className="font-medium text-slate-700">User:</span> {a.user_name || "—"}
+                                  </p>
+                                  {a.session_id ? (
+                                    <p className="break-all font-mono text-[10px] text-slate-600">
+                                      <span className="font-sans font-medium text-slate-700">Session:</span> {a.session_id}
+                                    </p>
+                                  ) : null}
+                                  <p className="font-mono text-[10px] leading-snug text-slate-700">
+                                    <span className="font-sans font-medium text-slate-600">reasoning_brief:</span>{" "}
+                                    {a.reasoning_brief || "—"}
+                                  </p>
+                                  {Array.isArray(a.tools) && a.tools.length ? (
+                                    <div>
+                                      <p className="text-[10px] font-medium text-slate-600">tools</p>
+                                      <ul className="mt-0.5 list-inside list-disc space-y-0.5 font-mono text-[10px] text-slate-700">
+                                        {a.tools.map((tool) => (
+                                          <li key={tool} className="break-all">
+                                            {tool}
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                  ) : (
+                                    <p className="text-[10px] text-slate-500">tools: (none)</p>
+                                  )}
+                                  <p className="font-mono text-[10px] break-all text-slate-700">
+                                    <span className="font-sans font-medium text-slate-600">outcome:</span> {a.outcome || "—"}
+                                  </p>
+                                  <p className="text-[10px] text-slate-600">
+                                    <span className="font-medium text-slate-700">Query:</span>{" "}
+                                    <span className="break-words">{a.query_summary || "—"}</span>
+                                  </p>
+                                  <p className="font-mono text-[10px] text-slate-500">
+                                    <span className="font-sans font-medium text-slate-600">timestamp (ISO):</span> {a.timestamp}
+                                  </p>
+                                </div>
+                              </details>
                             </div>
-                            <p className="mt-1 text-xs text-slate-700">{a.reasoning_brief}</p>
-                            <p className="mt-1 text-[11px] text-slate-500">User: {a.user_name} · Outcome: {a.outcome}</p>
-                            <p className="mt-1 text-[11px] text-slate-500">Query: {a.query_summary}</p>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </section>
                   ))}

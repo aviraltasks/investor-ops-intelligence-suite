@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { nextVoiceModeState } from "./voiceModeStateMachine";
 import type { VoiceModeState } from "./voiceModeStateMachine";
+import { friendlyAgentDisplayName, traceWhatHappenedLine } from "./agentTraceCopy";
 
 type Role = "assistant" | "user";
 
@@ -1022,32 +1023,64 @@ export function ChatClient({ initialName }: { initialName: string }) {
   const debugAgentTrace =
     typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debugAgents") === "1";
 
-  function renderTraceStepCard(t: AgentTrace, stepKey: string) {
+  function renderTraceStepCard(t: AgentTrace, stepKey: string, stepNumber: number) {
+    const pmLine = traceWhatHappenedLine(t);
     return (
-      <div key={stepKey} className="rounded-lg border border-slate-200 bg-slate-50/80 p-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
+      <div key={stepKey} className="flex gap-2">
+        <div className="flex shrink-0 flex-col pt-1">
           <span
-            className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
-              AGENT_COLORS[t.agent] || "bg-slate-100 text-slate-700"
-            }`}
+            className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full border border-slate-200/90 bg-slate-50 px-1 text-[10px] font-medium tabular-nums leading-none text-slate-500"
+            title={`Step ${stepNumber}`}
           >
-            {t.agent}
+            {stepNumber}
           </span>
-          <span className="text-[11px] text-slate-500">{t.replanned ? "Replanned" : "Single pass"}</span>
         </div>
-        <p className="mt-1.5 text-xs leading-snug text-slate-800">{t.reasoning_brief}</p>
-        {t.tools?.length > 0 && (
-          <div className="mt-1.5 flex flex-wrap gap-1">
-            {t.tools.map((tool) => (
-              <span key={tool} className="rounded bg-white px-1.5 py-0.5 text-[11px] text-slate-600 ring-1 ring-slate-200">
-                {tool}
-              </span>
-            ))}
+        <div className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50/80 p-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
+                AGENT_COLORS[t.agent] || "bg-slate-100 text-slate-700"
+              }`}
+            >
+              {friendlyAgentDisplayName(t.agent)}
+            </span>
           </div>
-        )}
-        <p className="mt-1.5 font-mono text-[11px] text-slate-600">
-          <span className="font-sans text-slate-500">Outcome:</span> {t.outcome || "—"}
-        </p>
+          <p className="mt-1.5 text-xs leading-snug text-slate-800">{pmLine}</p>
+          <details className="mt-1.5">
+            <summary className="cursor-pointer text-[10px] text-slate-500 underline decoration-slate-300 underline-offset-2 hover:text-slate-600 [&::-webkit-details-marker]:hidden">
+              Technical details
+            </summary>
+            <div className="mt-2 space-y-1.5 border-l border-slate-200 pl-2">
+              <p className="text-[10px] text-slate-600">
+                <span className="font-medium text-slate-700">Agent id:</span>{" "}
+                <span className="font-mono">{t.agent}</span>
+              </p>
+              <p className="text-[10px] text-slate-600">
+                <span className="font-medium text-slate-700">Pass:</span> {t.replanned ? "Replanned" : "Single pass"}
+              </p>
+              <p className="font-mono text-[10px] leading-snug text-slate-700">
+                <span className="font-sans font-medium text-slate-600">reasoning_brief:</span> {t.reasoning_brief || "—"}
+              </p>
+              {t.tools?.length ? (
+                <div>
+                  <p className="text-[10px] font-medium text-slate-600">tools</p>
+                  <ul className="mt-0.5 list-inside list-disc space-y-0.5 font-mono text-[10px] text-slate-700">
+                    {t.tools.map((tool) => (
+                      <li key={tool} className="break-all">
+                        {tool}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="text-[10px] text-slate-500">tools: (none)</p>
+              )}
+              <p className="font-mono text-[10px] break-all text-slate-700">
+                <span className="font-sans font-medium text-slate-600">outcome:</span> {t.outcome || "—"}
+              </p>
+            </div>
+          </details>
+        </div>
       </div>
     );
   }
@@ -1280,7 +1313,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
 
           {!isLoading && !traceTurnHistory.length && (
             <p className="text-xs text-slate-500">
-              Ask a question to see the real agent trace from the API (reasoning, tools, outcomes).
+              Ask a question to see what each agent did. Expand <span className="font-medium">Technical details</span> on a
+              step for raw tool and outcome codes.
             </p>
           )}
 
@@ -1291,10 +1325,11 @@ export function ChatClient({ initialName }: { initialName: string }) {
                   {blockIdx === 0 ? "Latest turn" : "Earlier turn"}
                 </p>
               </div>
+              <p className="mb-1 text-[10px] leading-tight text-slate-400">Steps run top → bottom</p>
               <p className="mb-2 line-clamp-4 text-xs font-medium text-slate-800">&ldquo;{block.userQuery}&rdquo;</p>
               <div className="space-y-2">
                 {block.traces.length ? (
-                  block.traces.map((t, idx) => renderTraceStepCard(t, `${block.id}-s${idx}`))
+                  block.traces.map((t, idx) => renderTraceStepCard(t, `${block.id}-s${idx}`, idx + 1))
                 ) : (
                   <p className="text-xs text-slate-500">No trace steps returned for this message.</p>
                 )}

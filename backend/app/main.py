@@ -754,7 +754,7 @@ def admin_agent_activity(limit: int = Query(default=100, ge=1, le=1000)) -> dict
         "items": [
             {
                 "timestamp": r.created_at.isoformat(timespec="seconds"),
-                "session_id": r.session_id,
+                "session_id": r.session_id or "",
                 "user_name": r.user_name,
                 "agent": r.agent,
                 "reasoning_brief": r.reasoning_brief,
