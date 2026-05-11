@@ -1053,8 +1053,8 @@ export function ChatClient({ initialName }: { initialName: string }) {
   }
 
   return (
-    <section className="mt-6 grid items-stretch gap-4 lg:grid-cols-[280px_minmax(0,1fr)_320px]">
-      <aside className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <section className="mt-6 grid gap-4 lg:min-h-0 lg:max-h-[calc(100dvh-11.5rem)] lg:grid-cols-[280px_minmax(0,1fr)_320px] lg:grid-rows-[minmax(0,1fr)] lg:items-stretch lg:overflow-hidden">
+      <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:h-full lg:min-h-0">
         <div className="flex min-h-0 shrink-0 flex-col">
           <h2 className="shrink-0 text-sm font-semibold text-slate-900">Covered Schemes</h2>
           <ul className="mt-3 max-h-[min(38vh,20rem)] space-y-1 overflow-y-auto overscroll-contain pr-1 text-xs text-slate-600">
@@ -1084,9 +1084,9 @@ export function ChatClient({ initialName }: { initialName: string }) {
         </div>
       </aside>
 
-      <div className="min-h-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:h-full lg:min-h-0">
         {showDisclaimer && (
-          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+          <div className="mb-3 shrink-0 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
             <div className="flex items-start justify-between gap-4">
               <p>
                 Disclaimer: Finn provides factual information from public sources and helps with advisor scheduling.
@@ -1103,12 +1103,12 @@ export function ChatClient({ initialName }: { initialName: string }) {
           </div>
         )}
 
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+        <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
           <span>Today: {today}</span>
           <span>Advisor hours: Mon–Fri, 9:00 AM–6:00 PM IST</span>
         </div>
 
-        <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="mb-3 flex shrink-0 items-center justify-between gap-2">
           <div>
             <p className="text-xs font-semibold text-slate-700">Voice Mode</p>
             {showVoiceHint && !isVoiceActive(voiceModeState) && (
@@ -1142,7 +1142,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
 
         <div
           ref={chatScrollRef}
-          className="h-[420px] space-y-3 overflow-auto rounded-xl border border-slate-100 bg-slate-50 p-3"
+          className="min-h-[280px] max-h-[min(70vh,28rem)] space-y-3 overflow-y-auto overscroll-contain rounded-xl border border-slate-100 bg-slate-50 p-3 lg:min-h-0 lg:max-h-none lg:flex-1"
         >
           {messages.map((m, idx) => (
             <div
@@ -1180,7 +1180,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
         </div>
 
         {bookingCode && (
-          <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm">
+          <div className="mt-3 shrink-0 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm">
             <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">
               Booking Confirmation
             </p>
@@ -1196,17 +1196,17 @@ export function ChatClient({ initialName }: { initialName: string }) {
         )}
 
         {error && (
-          <p className="mt-2 text-xs text-rose-700">
+          <p className="mt-2 shrink-0 text-xs text-rose-700">
             Backend error: {error}
           </p>
         )}
         {voiceBanner && (
-          <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
+          <p className="mt-2 shrink-0 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
             {voiceBanner}
             {debugAgentTrace && ttsErrorDetail ? ` (${ttsErrorDetail})` : ""}
           </p>
         )}
-        <div className="mt-3 flex flex-wrap gap-2">
+        <div className="mt-3 flex shrink-0 flex-wrap gap-2">
           {QUICK_TOPICS.map((t) => (
             <button
               key={t}
@@ -1219,7 +1219,7 @@ export function ChatClient({ initialName }: { initialName: string }) {
           ))}
         </div>
 
-        <form onSubmit={onSubmit} className="mt-3 flex items-center gap-2">
+        <form onSubmit={onSubmit} className="mt-3 flex shrink-0 items-center gap-2">
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -1258,14 +1258,14 @@ export function ChatClient({ initialName }: { initialName: string }) {
         </form>
       </div>
 
-      <aside className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:h-full lg:min-h-0">
         <div className="mb-3 shrink-0">
           <h2 className="text-sm font-semibold text-slate-900">How Finn AI Agents Are Helping</h2>
         </div>
 
         <div
           ref={agentPanelScrollRef}
-          className="min-h-0 flex-1 space-y-0 overflow-y-auto overscroll-contain pr-1"
+          className="min-h-0 flex-1 space-y-0 overflow-y-auto overflow-x-hidden overscroll-contain pr-1"
         >
           {isLoading && pendingTraceQuery && (
             <div className="mb-4 border-b border-slate-200 pb-3">

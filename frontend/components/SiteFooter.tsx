@@ -5,12 +5,19 @@ export function SiteFooter() {
   return (
     <footer className="mt-auto border-t border-slate-200 bg-white">
       <div className="mx-auto max-w-5xl px-4 py-8 text-sm text-slate-600">
-        <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-          <p className="font-medium text-slate-900">
+        <div className="flex flex-col items-center gap-3 text-center sm:flex-row sm:flex-wrap sm:items-center sm:justify-center sm:gap-x-6 sm:gap-y-2 sm:text-left">
+          <p className="font-medium text-slate-900 sm:shrink-0">
             Investor Ops & Intelligence Suite
           </p>
-          <div className="flex flex-wrap gap-x-4 gap-y-2">
+          <span
+            className="hidden h-4 w-px shrink-0 bg-slate-200 sm:block"
+            aria-hidden
+          />
+          <p className="flex flex-wrap items-center justify-center gap-x-2 text-slate-600 sm:gap-x-3">
             <span>Created by Aviral Rawat</span>
+            <span className="text-slate-300" aria-hidden>
+              ·
+            </span>
             <a
               href={LINKEDIN}
               target="_blank"
@@ -19,8 +26,7 @@ export function SiteFooter() {
             >
               LinkedIn
             </a>
-            <span className="text-slate-500">Built with Cursor</span>
-          </div>
+          </p>
         </div>
 
         <details className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
