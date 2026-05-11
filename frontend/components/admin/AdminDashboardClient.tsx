@@ -178,18 +178,25 @@ export function AdminDashboardClient() {
   }
 
   async function onSendBookingEmail(code: string) {
-    const to = "aviralstashes@gmail.com";
     const r = await fetch(`${backendBaseUrl}/api/admin/bookings/${encodeURIComponent(code)}/email/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ to_email: to }),
+      body: JSON.stringify({}),
     });
-    const d = await r.json();
+    const d = (await r.json()) as {
+      ok?: boolean;
+      message?: string;
+      recipients?: string[];
+      sent_count?: number;
+    };
     if (d.ok) {
-      setStatus(`Email marked sent for ${code} -> ${to}`);
+      const n = d.sent_count ?? d.recipients?.length ?? 0;
+      const sample = (d.recipients || []).slice(0, 3).join(", ");
+      const suffix = n > 3 ? ` (+${n - 3} more)` : "";
+      setStatus(`Booking briefing sent for ${code} to ${n} subscriber(s): ${sample}${suffix}`);
       void loadBookings();
     } else {
-      setStatus(`Email send failed for ${code}`);
+      setStatus(d.message || `Email send failed for ${code}`);
     }
   }
 

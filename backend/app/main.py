@@ -87,7 +87,23 @@ class SendPulseIn(BaseModel):
 
 
 class BookingEmailSendIn(BaseModel):
-    to_email: str = "aviralstashes@gmail.com"
+    """Legacy `to_email` is ignored; briefing is sent to all active pulse subscribers."""
+
+    to_email: str | None = None
+
+
+def _active_subscriber_emails(session: Session) -> list[str]:
+    rows = list(
+        session.scalars(select(Subscriber).where(Subscriber.active == 1).order_by(Subscriber.created_at)).all()
+    )
+    out: list[str] = []
+    seen: set[str] = set()
+    for r in rows:
+        e = (r.email or "").strip().lower()
+        if e and "@" in e and e not in seen:
+            seen.add(e)
+            out.append(e)
+    return out
 
 
 class SecureDetailsIn(BaseModel):
@@ -648,10 +664,18 @@ def admin_booking_email_preview(booking_code: str) -> dict[str, Any]:
 
 @app.post("/api/admin/bookings/{booking_code}/email/send")
 def admin_booking_email_send(booking_code: str, req: BookingEmailSendIn) -> dict[str, Any]:
+    _ = req.to_email  # ignored; recipients are all active pulse subscribers
     with _db() as session:
         b = session.scalar(select(Booking).where(Booking.booking_code == booking_code))
         if not b:
             return {"ok": False, "message": "booking not found"}
+        recipients = _active_subscriber_emails(session)
+        if not recipients:
+            return {
+                "ok": False,
+                "message": "no active subscribers — add advisors via /advisor subscribe or they will not receive booking briefings",
+                "booking_code": booking_code,
+            }
         draft_res = draft_advisor_email(session, booking_code)
         draft_text = str((draft_res.payload or {}).get("draft_text") or "").strip()
         if not draft_text:
@@ -663,22 +687,45 @@ def admin_booking_email_send(booking_code: str, req: BookingEmailSendIn) -> dict
                 f"Advisor: {b.advisor}\n"
                 f"Concern: {b.concern_summary}\n"
             )
+        subject = f"Advisor briefing: {b.booking_code} ({b.topic})"
+        sent: list[str] = []
+        failed: list[dict[str, str]] = []
+        send_detail = ""
+        send_mode = ""
+
         if _smtp_configured():
-            smtp = send_booking_email_smtp(
-                to_email=req.to_email,
-                subject=f"Advisor briefing: {b.booking_code} ({b.topic})",
-                body=draft_text,
-            )
-            if not smtp.ok:
-                return {"ok": False, "message": smtp.detail}
-            send_detail = smtp.detail
             send_mode = "smtp_live"
+            for to_email in recipients:
+                smtp = send_booking_email_smtp(to_email=to_email, subject=subject, body=draft_text)
+                if smtp.ok:
+                    sent.append(to_email)
+                else:
+                    failed.append({"email": to_email, "detail": smtp.detail})
+            if not sent:
+                return {
+                    "ok": False,
+                    "message": "all sends failed",
+                    "booking_code": booking_code,
+                    "failed": failed,
+                }
+            if failed:
+                return {
+                    "ok": False,
+                    "message": f"{len(failed)} of {len(recipients)} sends failed",
+                    "booking_code": booking_code,
+                    "sent": sent,
+                    "failed": failed,
+                }
+            send_detail = f"sent to {len(sent)} subscriber(s)"
         else:
-            send_detail = "smtp not configured; simulated send"
             send_mode = "mock_send"
+            sent = list(recipients)
+            send_detail = f"smtp not configured; simulated send to {len(sent)} subscriber(s)"
+
         b.email_status = "sent"
         meta = dict(b.integration_meta or {})
-        meta["email_sent_to"] = req.to_email
+        meta["email_sent_to"] = ", ".join(sent)
+        meta["email_recipients"] = recipients
         meta["email_send_detail"] = send_detail
         meta["email_send_mode"] = send_mode
         sheet_sync = sync_booking_sheet(b)
@@ -688,7 +735,8 @@ def admin_booking_email_send(booking_code: str, req: BookingEmailSendIn) -> dict
     return {
         "ok": True,
         "booking_code": booking_code,
-        "to_email": req.to_email,
+        "recipients": sent,
+        "sent_count": len(sent),
         "status": "sent",
         "detail": send_detail,
         "mode": send_mode,

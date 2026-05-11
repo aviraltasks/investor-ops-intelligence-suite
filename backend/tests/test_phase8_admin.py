@@ -89,13 +89,16 @@ def test_admin_booking_email_actions(monkeypatch, tmp_path) -> None:
         assert preview.json()["ok"] is True
         assert code in preview.json()["draft"]
 
-        send = client.post(
-            f"/api/admin/bookings/{code}/email/send",
-            json={"to_email": "advisor@example.com"},
-        )
+        sub = client.post("/api/subscribers", json={"email": "advisor-briefing-test@example.com"})
+        assert sub.status_code == 200
+
+        send = client.post(f"/api/admin/bookings/{code}/email/send", json={})
         assert send.status_code == 200
-        assert send.json()["ok"] is True
-        assert send.json()["status"] == "sent"
+        body = send.json()
+        assert body["ok"] is True
+        assert body["status"] == "sent"
+        assert body.get("sent_count") == 1
+        assert "advisor-briefing-test@example.com" in (body.get("recipients") or [])
 
 
 def test_subscribers_and_pulse_send(monkeypatch, tmp_path) -> None:
