@@ -553,36 +553,36 @@ export function AdminDashboardClient() {
         {tab === "bookings" && (
           <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
             <h3 className="shrink-0 text-sm font-semibold text-slate-900">Bookings</h3>
-            <div className="min-h-0 max-h-[min(52vh,32rem)] overflow-auto rounded-lg border border-slate-100">
-              <table className="w-full min-w-[640px] text-left text-xs">
+            <div className="min-h-0 max-h-[min(52vh,32rem)] overflow-y-auto overflow-x-hidden rounded-lg border border-slate-100">
+              <table className="w-full table-fixed text-left text-xs break-words">
                 <thead className="sticky top-0 z-10 bg-slate-50 text-slate-600 shadow-[inset_0_-1px_0_0_rgb(226,232,240)]">
                   <tr>
-                    <th className="py-2 pl-1 pr-2">Code</th>
-                    <th className="py-2 pr-2">Name</th>
-                    <th className="py-2 pr-2">Topic</th>
-                    <th className="py-2 pr-2">Date/Time</th>
-                    <th className="py-2 pr-2">Advisor</th>
-                    <th className="py-2 pr-2">Status</th>
-                    <th className="py-2 pr-2">Email</th>
-                    <th className="py-2 pr-1">Actions</th>
+                    <th className="w-[11%] py-2 pl-1 pr-1">Code</th>
+                    <th className="w-[12%] py-2 pr-1">Name</th>
+                    <th className="w-[14%] py-2 pr-1">Topic</th>
+                    <th className="w-[18%] py-2 pr-1">Date/Time</th>
+                    <th className="w-[11%] py-2 pr-1">Advisor</th>
+                    <th className="w-[11%] py-2 pr-1">Status</th>
+                    <th className="w-[11%] py-2 pr-1">Email</th>
+                    <th className="w-[12%] py-2 pr-1">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {bookings.map((b) => (
                     <tr key={b.booking_code} className="border-t border-slate-100 bg-white">
-                      <td className="py-1.5 pl-1 pr-2 font-mono">{b.booking_code}</td>
-                      <td className="py-1.5 pr-2">{b.customer_name}</td>
-                      <td className="py-1.5 pr-2">{b.topic}</td>
-                      <td className="py-1.5 pr-2">
+                      <td className="py-1.5 pl-1 pr-1 align-top font-mono text-[11px]">{b.booking_code}</td>
+                      <td className="py-1.5 pr-1 align-top">{b.customer_name}</td>
+                      <td className="py-1.5 pr-1 align-top">{b.topic}</td>
+                      <td className="py-1.5 pr-1 align-top leading-snug">
                         {b.date} {formatTimeIstForDisplay(b.time_ist)}
                       </td>
-                      <td className="py-1.5 pr-2">{b.advisor}</td>
-                      <td className="py-1.5 pr-2">
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5">{b.status}</span>
+                      <td className="py-1.5 pr-1 align-top">{b.advisor}</td>
+                      <td className="py-1.5 pr-1 align-top">
+                        <span className="inline-block rounded-full bg-slate-100 px-2 py-0.5">{b.status}</span>
                       </td>
-                      <td className="py-1.5 pr-2">{b.email_status}</td>
-                      <td className="py-1.5 pr-1">
-                        <div className="flex gap-1">
+                      <td className="py-1.5 pr-1 align-top">{b.email_status}</td>
+                      <td className="py-1.5 pr-1 align-top">
+                        <div className="flex flex-wrap gap-1">
                           <button
                             type="button"
                             onClick={() => void onPreviewBookingEmail(b.booking_code)}
