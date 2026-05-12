@@ -239,14 +239,15 @@ def test_cross_session_slot_conflict_is_blocked(monkeypatch, tmp_path) -> None:
     reset_engine()
 
     with TestClient(app) as client:
-        _chat(client, "Book KYC tomorrow at 10 am", session_id="user-a")
-        first = _chat(client, "yes", session_id="user-a")
+        _chat(client, "Book KYC tomorrow at 10 am", session_id="user-a", user_name="Alice")
+        first = _chat(client, "yes", session_id="user-a", user_name="Alice")
         assert first["payload"].get("status") == "tentative"
 
-        second = _chat(client, "Book SIP tomorrow at 10 am", session_id="user-b")
+        second = _chat(client, "Book SIP tomorrow at 10 am", session_id="user-b", user_name="Bob")
         low = second["response"].lower()
-        assert second["payload"].get("status") == "conflict"
-        assert "already have booking" in low or "already held" in low
+        assert second["payload"].get("status") == "slot_unavailable"
+        assert "already have booking" not in low
+        assert "another customer" in low or "different" in low or "availability" in low
 
 
 def test_faq_topic_buckets_for_admin_analytics(monkeypatch, tmp_path) -> None:

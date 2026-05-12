@@ -277,6 +277,16 @@ def _booking_card_payload_row(b: Booking) -> dict[str, Any]:
     }
 
 
+def _booking_holder_matches_user(booking: Booking, session_id: str, user_name: str) -> bool:
+    """True if this booking row belongs to the current chatter (session match or same display name)."""
+    sid = (session_id or "").strip()
+    if sid and (booking.session_id or "").strip() == sid:
+        return True
+    u = (user_name or "").strip().lower() or "user"
+    c = (booking.customer_name or "").strip().lower() or "user"
+    return u == c
+
+
 def _llm_polish_scheduling_reply(*, user_message: str, draft: str, payload: dict[str, Any], action: str) -> str:
     if not llm_available():
         return draft
@@ -1237,18 +1247,35 @@ def handle_scheduling(session: Session, session_id: str, user_name: str, message
         .limit(1)
     )
     if conflict:
+        if _booking_holder_matches_user(conflict, session_id, user_name):
+            return AgentResult(
+                response_text=(
+                    f"You already have booking {conflict.booking_code} at {date_str} {time_ist}. "
+                    "Would you like to reschedule instead?"
+                ),
+                payload={"status": "conflict", **_booking_card_payload_row(conflict)},
+                traces=[
+                    AgentTraceStep(
+                        agent="scheduling_agent",
+                        reasoning_brief="User requested same slot they already hold (session or display name match).",
+                        tools=["db.select(bookings)"],
+                        outcome="slot_conflict",
+                    )
+                ],
+            )
         return AgentResult(
             response_text=(
-                f"You already have booking {conflict.booking_code} at {date_str} {time_ist}. "
-                "Would you like to reschedule instead?"
+                "That date and time are already booked by another customer, so I cannot place a new hold there. "
+                "Please pick a different weekday time in IST (Mon–Fri, 9:00 AM–6:00 PM), or say **availability** "
+                "and I will suggest a couple of open slots."
             ),
-            payload={"status": "conflict", **_booking_card_payload_row(conflict)},
+            payload={"status": "slot_unavailable"},
             traces=[
                 AgentTraceStep(
                     agent="scheduling_agent",
-                    reasoning_brief="Duplicate slot in same session — suggest reschedule per SCRIPT_FLOW.",
+                    reasoning_brief="Slot taken by a different user — blocked new booking without exposing their booking code.",
                     tools=["db.select(bookings)"],
-                    outcome="slot_conflict",
+                    outcome="slot_unavailable",
                 )
             ],
         )

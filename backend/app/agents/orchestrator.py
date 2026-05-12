@@ -296,6 +296,8 @@ def _is_scheduling_critical_reply(text: str) -> bool:
             "that looks like a past slot",
             "that slot was just taken",
             "already have booking",
+            "already booked by another",
+            "cannot place a new hold",
             "booking code:",
             "you're all set",
             "you are all set",
